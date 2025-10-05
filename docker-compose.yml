@@ -1,0 +1,252 @@
+services:
+  # ========================= HADOOP (HDFS) =========================
+  namenode:
+    image: apache/hadoop:3.3.6
+    container_name: namenode
+    user: "0:0"                    # <— run as root
+    ports:
+      - "9870:9870"
+      - "8020:8020"
+    volumes:
+      - ./hdfs/namenode:/hadoop/dfs/name
+      - ./data:/opt/spark-data
+      - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      mkdir -p /hadoop/dfs/name &&
+      chown -R root:root /hadoop/dfs/name &&
+      if [ ! -d /hadoop/dfs/name/current ] || [ -z \"$(ls -A /hadoop/dfs/name 2>/dev/null)\" ]; then
+        echo 'Formatting NameNode (first run)...';
+        hdfs namenode -format -nonInterActive -force || true;
+      fi &&
+      exec hdfs namenode
+      "
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -sf http://localhost:9870 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    container_name: datanode
+    user: "0:0"                    # <— run as root
+    depends_on:
+      - namenode
+    ports:
+      - "9864:9864"
+    volumes:
+      - ./hdfs/datanode:/hadoop/dfs/data
+      - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      mkdir -p /hadoop/dfs/data &&
+      chown -R root:root /hadoop/dfs/data &&
+      exec hdfs datanode
+      "
+
+
+  # --- One-shot HDFS initializer (creates dirs & optionally seeds input) ---
+  hdfs-init:
+    image: apache/hadoop:3.3.6
+    container_name: hdfs-init
+    depends_on:
+      namenode:
+        condition: service_healthy
+    user: "0:0"                     # run as root (matches NN superuser)
+    environment:
+      - HADOOP_USER_NAME=root       # tell Hadoop CLI to act as 'root'
+    volumes:
+      - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+      - ./data:/opt/spark-data
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      echo 'Waiting for HDFS...' ;
+      until hdfs dfs -ls / >/dev/null 2>&1; do sleep 3; done ;
+      echo 'Creating /data/input and /data/output in HDFS...' ;
+      hdfs dfs -mkdir -p /data/input /data/output ;
+      echo 'Creating /spark-events in HDFS...' ;
+      hdfs dfs -mkdir -p /spark-events ;
+      hdfs dfs -chmod -R 1777 /data /spark-events ;
+      if compgen -G '/opt/spark-data/input/*' > /dev/null; then
+        echo 'Seeding host input files into HDFS /data/input ...' ;
+        hdfs dfs -put -f /opt/spark-data/input/* /data/input/ ;
+      else
+        echo 'No host seed files found under ./data/input – skipping seed.' ;
+      fi ;
+      echo 'HDFS init complete.'
+      "
+    restart: "no"
+
+
+  # ========================= KAFKA (with ZooKeeper) =========================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zk
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zk:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+
+  # ========================= SPARK (official image needs explicit commands) =========================
+  spark-master:
+    image: apache/spark:latest
+    container_name: spark-master
+    depends_on:
+      - namenode
+      - datanode
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    ports:
+      - "8080:8080"     # Spark Master UI
+      - "7077:7077"     # Spark Master RPC
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./checkpoints:/opt/spark-checkpoints
+      - ./spark-events:/tmp/spark-events
+      # Mount Hadoop client configs so Spark can access HDFS:
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint: ["/bin/bash","-lc"]
+    command: >
+      "
+      exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+        --host spark-master
+        --port 7077
+        --webui-port 8080
+      "
+
+  spark-worker-1:
+    image: apache/spark:latest
+    container_name: spark-worker-1
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    ports:
+      - "8081:8081"     # worker-1 UI
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./checkpoints:/opt/spark-checkpoints
+      - ./spark-events:/tmp/spark-events
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - --webui-port
+      - "8081"
+      - spark://spark-master:7077   # <-- REQUIRED last arg
+
+  spark-worker-2:
+    image: apache/spark:latest
+    container_name: spark-worker-2
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    ports:
+      - "8082:8082"     # worker-2 UI
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./checkpoints:/opt/spark-checkpoints
+      - ./spark-events:/tmp/spark-events
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint:
+      - /opt/spark/bin/spark-class
+      - org.apache.spark.deploy.worker.Worker
+      - --webui-port
+      - "8082"
+      - spark://spark-master:7077   # <-- REQUIRED last arg
+
+
+  spark-history-server:
+    image: apache/spark:latest
+    container_name: spark-history-server
+    depends_on:
+      - spark-master
+    ports:
+      - "18081:18081"
+    volumes:
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint:
+      - /bin/bash
+      - -lc
+    command: >
+      SPARK_HISTORY_OPTS='-Dspark.history.fs.logDirectory=hdfs://namenode:8020/spark-events'
+      exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
+
+  # --- One-shot batch analysis (reads HDFS input, writes HDFS + host CSV) ---
+  spark-app:
+    image: apache/spark:latest
+    container_name: spark-app
+    depends_on:
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+      - hdfs-init
+    environment:
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./checkpoints:/opt/spark-checkpoints
+      - ./spark-events:/tmp/spark-events
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint: ["/bin/bash","-lc"]
+    command: |
+      echo 'Waiting for input CSVs in HDFS...' ;
+      until hdfs dfs -ls /data/input/*.csv >/dev/null 2>&1; do
+        echo '  still waiting for /data/input/*.csv ...'; sleep 2;
+      done ;
+      echo 'Found input files:' ; hdfs dfs -ls /data/input/*.csv ;
+      exec /opt/spark/bin/spark-submit \
+        --master spark://spark-master:7077 \
+        --conf spark.eventLog.enabled=true \
+        --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
+        /opt/spark-apps/pipeline_batch.py
+
+  # ========================= DASHBOARD (Flask + Chart.js) =========================
+  dashboard:
+    build: ./dashboard
+    container_name: retail-dashboard
+    depends_on:
+      - spark-app
+    ports:
+      - "5000:5000"
+    environment:
+      - OUTPUT_DIR=/opt/spark-data/output
+    volumes:
+      - ./data:/opt/spark-data
