@@ -28,13 +28,25 @@ logger = logging.getLogger("retail_pipeline")
 
 USE_HDFS = True
 if USE_HDFS:
-    INPUT_PATH  = "hdfs://namenode:8020/data/input"
+    INPUT_PATH = "hdfs://namenode:8020/data/input"
     OUT_PARQUET = "hdfs://namenode:8020/data/output/analysis_parquet"
     OUT_LOCAL_CSV = "/opt/spark-data/output/analysis_csv"
 else:
-    INPUT_PATH  = "/opt/spark-data/input"
+    INPUT_PATH = "/opt/spark-data/input"
     OUT_PARQUET = "/opt/spark-data/output/analysis_parquet"
     OUT_LOCAL_CSV = "/opt/spark-data/output/analysis_csv"
+
+
+def _as_local_uri(path):
+    """Ensure Spark writes to the local filesystem even when default FS is HDFS."""
+
+    if path.startswith("file://"):
+        return path
+
+    # Normalise the path to avoid accidental HDFS writes when Spark's default
+    # filesystem is configured to HDFS. Prefixing with ``file://`` forces Spark
+    # to use the container's local filesystem.
+    return f"file://{path}"
 
 APP_NAME = "batch.retail_sales_clean_analyze"
 
@@ -192,20 +204,21 @@ def main():
         .partitionBy("order_date")
         .parquet(OUT_PARQUET))
 
-    logger.info("Writing summarized CSV (single file) to: %s", OUT_LOCAL_CSV)
+    local_csv_uri = _as_local_uri(OUT_LOCAL_CSV)
+    logger.info("Writing summarized CSV (single file) to: %s", local_csv_uri)
     (daily_product
         .coalesce(1)
         .write
         .mode("overwrite")
         .option("header", True)
-        .csv(OUT_LOCAL_CSV))
+        .csv(local_csv_uri))
 
     logger.info("KPI snapshot:")
     kpis.show(truncate=False)
     (kpis.coalesce(1)
          .write.mode("overwrite")
          .option("header", True)
-         .csv(OUT_LOCAL_CSV + "_kpis"))
+         .csv(_as_local_uri(OUT_LOCAL_CSV + "_kpis")))
 
     logger.info("Pipeline complete. Shutting down Spark session.")
     spark.stop()
