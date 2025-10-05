@@ -7,7 +7,7 @@ import time
 from py4j.protocol import Py4JJavaError
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, coalesce, to_date, to_timestamp, trim,
+    col, coalesce, expr, to_date, to_timestamp, trim,
     when, lit, round as round_, sum as sum_, countDistinct
 )
 from pyspark.sql.types import DoubleType
@@ -153,13 +153,13 @@ def main():
 
     if has_amount:
         logger.info("Using provided 'amount' column for monetary values")
-        df = df.withColumn("amount", col("amount").cast(DoubleType()))
+        df = df.withColumn("amount", expr("try_cast(amount AS double)"))
     elif has_qty_price:
         price_col = "unit_price" if "unit_price" in cols else "price"
         logger.info("Computing amount from quantity * %s", price_col)
         df = (df
-              .withColumn("quantity", col("quantity").cast(DoubleType()))
-              .withColumn(price_col, col(price_col).cast(DoubleType()))
+              .withColumn("quantity", expr("try_cast(quantity AS double)"))
+              .withColumn(price_col, expr(f"try_cast(`{price_col}` AS double)"))
               .withColumn("amount", (col("quantity") * col(price_col)).cast(DoubleType())))
     else:
         logger.info("No amount/quantity-price columns detected — defaulting to 0.0")
