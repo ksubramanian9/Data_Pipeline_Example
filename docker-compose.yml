@@ -227,11 +227,7 @@ services:
       - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
     entrypoint: ["/bin/bash","-lc"]
     command: |
-      echo 'Waiting for input CSVs in HDFS...' ;
-      until hdfs dfs -ls /data/input/*.csv >/dev/null 2>&1; do
-        echo '  still waiting for /data/input/*.csv ...'; sleep 2;
-      done ;
-      echo 'Found input files:' ; hdfs dfs -ls /data/input/*.csv ;
+      echo 'Launching Spark batch job (input readiness handled in code)...';
       exec /opt/spark/bin/spark-submit \
         --master spark://spark-master:7077 \
         --conf spark.eventLog.enabled=true \

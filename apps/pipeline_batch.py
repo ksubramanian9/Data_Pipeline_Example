@@ -1,3 +1,8 @@
+import glob
+import os
+import time
+
+from py4j.protocol import Py4JJavaError
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, coalesce, to_date, to_timestamp, trim,
@@ -24,8 +29,50 @@ spark = (SparkSession.builder
          .getOrCreate())
 spark.sparkContext.setLogLevel("WARN")
 
+def wait_for_input_files(spark_session, path, use_hdfs, pattern="*.csv",
+                         poll_interval=5, timeout_seconds=300):
+    """Block until CSV input files are visible either locally or on HDFS."""
+    deadline = (time.time() + timeout_seconds) if timeout_seconds else None
+
+    if use_hdfs:
+        jvm = spark_session._jvm
+        fs_class = jvm.org.apache.hadoop.fs.FileSystem
+        path_class = jvm.org.apache.hadoop.fs.Path
+        uri_class = jvm.java.net.URI
+        conf = spark_session._jsc.hadoopConfiguration()
+        glob_target = path_class(f"{path.rstrip('/')}/{pattern}")
+
+        print(f"[INFO] Waiting for HDFS files matching {pattern} under {path} ...")
+        while True:
+            try:
+                fs = fs_class.get(uri_class(path), conf)
+                matches = fs.globStatus(glob_target)
+                if matches and len(matches) > 0:
+                    print(f"[INFO] Detected {len(matches)} file(s) in {path}.")
+                    return
+            except Py4JJavaError as err:
+                print(f"[WARN] Could not access HDFS path {path}: {err.java_exception}")
+
+            if deadline and time.time() > deadline:
+                raise RuntimeError(f"Timed out waiting for files in {path}")
+
+            time.sleep(poll_interval)
+    else:
+        print(f"[INFO] Waiting for local files matching {pattern} under {path} ...")
+        while True:
+            matches = glob.glob(os.path.join(path, pattern))
+            if matches:
+                print(f"[INFO] Detected {len(matches)} file(s) in {path}.")
+                return
+
+            if deadline and time.time() > deadline:
+                raise RuntimeError(f"Timed out waiting for files in {path}")
+
+            time.sleep(poll_interval)
+
+
 print(f"[INFO] Reading input from: {INPUT_PATH}")
-INPUT_PATH = "hdfs://namenode:8020/data/input"
+wait_for_input_files(spark, INPUT_PATH, USE_HDFS)
 
 df = (spark.read
       .option("header", True)
