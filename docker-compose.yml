@@ -215,6 +215,7 @@ services:
       - spark-worker-1
       - spark-worker-2
       - hdfs-init
+      - kafka
     environment:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
@@ -235,6 +236,57 @@ services:
             --conf spark.eventLog.enabled=true \
             --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
             /opt/spark-apps/pipeline_batch.py
+
+  # --- Continuous Structured Streaming job reading Kafka 'sales' topic ---
+  spark-stream:
+    image: apache/spark:latest
+    container_name: spark-stream
+    depends_on:
+      - kafka
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+      - hdfs-init
+    environment:
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    volumes:
+      - ./apps:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./checkpoints:/opt/spark-checkpoints
+      - ./spark-events:/tmp/spark-events
+      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
+      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+          echo 'Launching Spark streaming job (Kafka -> HDFS aggregates)...';
+          exec /opt/spark/bin/spark-submit \
+            --master spark://spark-master:7077 \
+            --conf spark.eventLog.enabled=true \
+            --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
+            /opt/spark-apps/streaming_sales_aggregator.py
+
+  # --- Kafka event generator that replays CSV orders into the stream ---
+  event-generator:
+    build:
+      context: .
+      dockerfile: producers/Dockerfile
+    container_name: event-generator
+    depends_on:
+      - kafka
+      - hdfs-init
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=sales
+      - EVENTS_PER_SECOND=5
+      - EVENT_INPUT_DIR=/opt/spark-data/input
+    volumes:
+      - ./data:/opt/spark-data
+    command:
+      - --loop
+      - --shuffle
 
   # ========================= DASHBOARD (Flask + Chart.js) =========================
   dashboard:

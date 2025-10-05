@@ -7,7 +7,9 @@ A complete, classroom‑ready demo that ingests retail transactions, cleans & ag
 .
 ├─ docker-compose.yml
 ├─ apps/
-│  └─ pipeline_batch.py           # Spark ETL + aggregation (batch)
+│  ├─ pipeline_batch.py           # Spark ETL + aggregation (batch)
+│  ├─ streaming_sales_aggregator.py  # Spark Structured Streaming job
+│  └─ kafka_event_producer.py     # CSV → Kafka event generator script
 ├─ data/
 │  ├─ input/                      # Sample CSVs (already included)
 │  └─ output/                     # Spark writes host‑readable CSV here
@@ -18,6 +20,7 @@ A complete, classroom‑ready demo that ingests retail transactions, cleans & ag
 │  └─ static/
 │     ├─ index.html
 │     └─ script.js
+├─ producers/                     # Dockerfile for Kafka event generator
 ├─ hdfs/                          # HDFS persistent volumes
 │  ├─ namenode/
 │  └─ datanode/
@@ -30,7 +33,7 @@ A complete, classroom‑ready demo that ingests retail transactions, cleans & ag
 docker compose up -d namenode datanode
 docker compose up -d hdfs-init
 docker compose up -d spark-master spark-worker-1 spark-worker-2
-docker compose up -d spark-app spark-history-server
+docker compose up -d spark-app spark-stream spark-history-server event-generator
 ```
 
 ## One‑command happy path
@@ -42,7 +45,9 @@ This will:
 1. Start HDFS + Kafka + Spark
 2. Initialize HDFS and seed `/data/input` with the sample host CSVs
 3. Run the Spark batch job once (ETL + aggregation)
-4. Bring up the dashboard on **http://localhost:5000**
+4. Launch the continuous Spark streaming job that reads Kafka `sales` events
+5. Start the Python producer that replays sample CSVs into Kafka
+6. Bring up the dashboard on **http://localhost:5000**
 
 ## What it demonstrates
 - **HDFS** as a data lake landing/warehouse (Parquet at `/data/output/analysis_parquet`)
@@ -66,9 +71,25 @@ The new output appears under `./data/output/analysis_csv/` and in HDFS under `/d
 ## Switching to local paths (skip HDFS)
 In `apps/pipeline_batch.py`, set `USE_HDFS = False`. The job will read/write only from the bind‑mounted `./data` directory.
 
-## Extending to streaming
-- Add a `spark-stream` service that reads from Kafka topic `sales` and writes rolling aggregates to `/opt/spark-data/output/stream_agg/` with checkpoints in `/opt/spark-checkpoints/sales_agg`.
-- Use the included Kafka broker at `kafka:9092` and a simple Python producer to push events derived from the CSVs.
+## Streaming pipeline
+
+The docker-compose stack now includes an end-to-end streaming flow:
+
+- **Producer (`event-generator`)** replays the CSV samples into Kafka topic `sales` at ~5 events/second. Tweak the
+  rate by setting `EVENTS_PER_SECOND` or override the command, e.g.
+  `docker compose run event-generator --rate 20 --loop`.
+- **Structured Streaming (`spark-stream`)** consumes `sales`, applies the same cleaning logic, and maintains rolling
+  1-hour revenue totals per product with 15-minute hops. Aggregates land in HDFS at
+  `hdfs://namenode:8020/data/output/streaming_product_revenue` (set `STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue`
+  if you prefer a host-mounted directory).
+- **Dashboard** can be pointed at the streaming output by swapping its data source to the new Parquet path or by adding
+  another chart that reads the streaming parquet files.
+
+To (re)start just the streaming pieces:
+
+```bash
+docker compose up --build spark-stream event-generator
+```
 
 ## Teaching prompts
 - *Partitioning*: Why do we partition Parquet by `order_date`? Try adding another month and observe file layout.
