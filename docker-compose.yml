@@ -225,14 +225,16 @@ services:
       - ./spark-events:/tmp/spark-events
       - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
       - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
-    entrypoint: ["/bin/bash","-lc"]
-    command: |
-      echo 'Launching Spark batch job (input readiness handled in code)...';
-      exec /opt/spark/bin/spark-submit \
-        --master spark://spark-master:7077 \
-        --conf spark.eventLog.enabled=true \
-        --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
-        /opt/spark-apps/pipeline_batch.py
+    entrypoint:
+      - /bin/bash
+      - -lc
+      - |
+          echo 'Launching Spark batch job (input readiness handled in code)...';
+          exec /opt/spark/bin/spark-submit \
+            --master spark://spark-master:7077 \
+            --conf spark.eventLog.enabled=true \
+            --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
+            /opt/spark-apps/pipeline_batch.py
 
   # ========================= DASHBOARD (Flask + Chart.js) =========================
   dashboard:
