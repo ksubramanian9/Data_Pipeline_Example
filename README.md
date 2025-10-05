@@ -82,6 +82,9 @@ The docker-compose stack now includes an end-to-end streaming flow:
   1-hour revenue totals per product with 15-minute hops. Aggregates land in HDFS at
   `hdfs://namenode:8020/data/output/streaming_product_revenue` (set `STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue`
   if you prefer a host-mounted directory).
+- **Connector jars**: the stock `apache/spark` image does not ship the Kafka datasource jars. The streaming job automatically
+  requests `org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`. Override it with `SPARK_KAFKA_PACKAGE` or append more
+  comma-separated coordinates via `SPARK_EXTRA_PACKAGES`.
 - **Dashboard** can be pointed at the streaming output by swapping its data source to the new Parquet path or by adding
   another chart that reads the streaming parquet files.
 

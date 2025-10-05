@@ -48,17 +48,36 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "sales")
 CHECKPOINT_DIR = os.environ.get("STREAM_CHECKPOINT_DIR", "/opt/spark-checkpoints/streaming_sales")
 OUTPUT_PATH = os.environ.get("STREAM_OUTPUT_PATH", "hdfs://namenode:8020/data/output/streaming_product_revenue")
+# The Kafka connector jars are not bundled with the vanilla Spark image.
+# Use the official artifact that matches the Spark/Scala version and allow
+# callers to override via environment variables when needed.
+DEFAULT_KAFKA_PACKAGE = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
 
 
 def build_spark_session() -> SparkSession:
     logger.info("Creating Spark session '%s'", APP_NAME)
-    spark = (
+    builder = (
         SparkSession.builder
         .appName(APP_NAME)
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", os.environ.get("SPARK_SHUFFLE_PARTITIONS", "4"))
-        .getOrCreate()
     )
+
+    # Honour an explicit SPARK_JARS_PACKAGES if provided, otherwise make sure
+    # the Kafka connector is available. Additional packages can be supplied via
+    # SPARK_EXTRA_PACKAGES (comma-separated) without losing the default.
+    if "SPARK_JARS_PACKAGES" not in os.environ:
+        kafka_package = os.environ.get("SPARK_KAFKA_PACKAGE", DEFAULT_KAFKA_PACKAGE)
+        extra_packages = os.environ.get("SPARK_EXTRA_PACKAGES", "").strip()
+        packages = ",".join(
+            pkg
+            for pkg in [kafka_package, extra_packages]
+            if pkg
+        )
+        if packages:
+            builder = builder.config("spark.jars.packages", packages)
+
+    spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     return spark
 
