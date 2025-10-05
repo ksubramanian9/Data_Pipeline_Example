@@ -1,0 +1,4 @@
+data/*
+hdfs/*
+checkpoints/*
+spark-events/*
