@@ -53,10 +53,23 @@ Run the entire stack, batch job, and dashboard:
 docker compose -f docker-compose.batch.yml up --build dashboard
 ```
 This will:
-1. Start HDFS + Spark (master + workers)
-2. Initialize HDFS and seed `/data/input` with the sample host CSVs
-3. Run the Spark batch job once (ETL + aggregation)
-4. Bring up the dashboard on **http://localhost:5000**
+1. Generate 30 days of synthetic retail transactions (one CSV per day) under `./data/input`
+2. Start HDFS + Spark (master + workers)
+3. Initialize HDFS and load the generated CSVs into `/data/input`
+4. Run the Spark batch job once (ETL + aggregation)
+5. Bring up the dashboard on **http://localhost:5000**
+
+### Customising the synthetic batch inputs
+
+The new `data-generator` service (powered by `services/batch/generate_synthetic_data.py`) creates lightweight yet
+realistic product sales before Spark starts. Adjust the behaviour by running the script manually, for example:
+
+```bash
+python services/batch/generate_synthetic_data.py --days 14 --transactions-per-day 24 --start-date 2025-01-01
+```
+
+Use `--keep-existing` if you want to append to whatever is already in `./data/input`; by default the generator clears
+older CSVs so each Compose run has a fresh, predictable dataset.
 
 ## What it demonstrates
 - **HDFS** as a data lake landing/warehouse (Parquet at `/data/output/analysis_parquet`)
