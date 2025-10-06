@@ -211,6 +211,8 @@ services:
     environment:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
+      - STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue
+      - STREAM_CHECKPOINT_DIR=/opt/spark-checkpoints/streaming_sales
     volumes:
       - ./services:/opt/services
       - ./data:/opt/spark-data
@@ -247,3 +249,17 @@ services:
     command:
       - --loop
       - --shuffle
+
+  streaming-dashboard:
+    build:
+      context: .
+      dockerfile: streaming_dashboard/Dockerfile
+    container_name: streaming-dashboard
+    depends_on:
+      - spark-stream
+    environment:
+      - STREAM_PARQUET_DIR=/opt/spark-data/output/streaming_product_revenue
+    volumes:
+      - ./data:/opt/spark-data
+    ports:
+      - "5100:5100"
