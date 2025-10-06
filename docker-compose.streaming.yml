@@ -1,9 +1,8 @@
 services:
-  # ========================= HADOOP (HDFS) =========================
   namenode:
     image: apache/hadoop:3.3.6
     container_name: namenode
-    user: "0:0"                    # <— run as root
+    user: "0:0"
     ports:
       - "9870:9870"
       - "8020:8020"
@@ -12,7 +11,7 @@ services:
       - ./data:/opt/spark-data
       - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
-    entrypoint: ["/bin/bash","-lc"]
+    entrypoint: ["/bin/bash", "-lc"]
     command: >
       "
       mkdir -p /hadoop/dfs/name &&
@@ -29,11 +28,10 @@ services:
       timeout: 5s
       retries: 20
 
-
   datanode:
     image: apache/hadoop:3.3.6
     container_name: datanode
-    user: "0:0"                    # <— run as root
+    user: "0:0"
     depends_on:
       - namenode
     ports:
@@ -42,7 +40,7 @@ services:
       - ./hdfs/datanode:/hadoop/dfs/data
       - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
-    entrypoint: ["/bin/bash","-lc"]
+    entrypoint: ["/bin/bash", "-lc"]
     command: >
       "
       mkdir -p /hadoop/dfs/data &&
@@ -50,43 +48,39 @@ services:
       exec hdfs datanode
       "
 
-
-  # --- One-shot HDFS initializer (creates dirs & optionally seeds input) ---
   hdfs-init:
     image: apache/hadoop:3.3.6
     container_name: hdfs-init
     depends_on:
       namenode:
         condition: service_healthy
-    user: "0:0"                     # run as root (matches NN superuser)
+    user: "0:0"
     environment:
-      - HADOOP_USER_NAME=root       # tell Hadoop CLI to act as 'root'
+      - HADOOP_USER_NAME=root
     volumes:
       - ./conf/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
       - ./conf/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
       - ./data:/opt/spark-data
-    entrypoint: ["/bin/bash","-lc"]
+    entrypoint: ["/bin/bash", "-lc"]
     command: >
       "
-      echo 'Waiting for HDFS...' ;
-      until hdfs dfs -ls / >/dev/null 2>&1; do sleep 3; done ;
-      echo 'Creating /data/input and /data/output in HDFS...' ;
-      hdfs dfs -mkdir -p /data/input /data/output ;
-      echo 'Creating /spark-events in HDFS...' ;
-      hdfs dfs -mkdir -p /spark-events ;
-      hdfs dfs -chmod -R 1777 /data /spark-events ;
+      echo 'Waiting for HDFS...';
+      until hdfs dfs -ls / >/dev/null 2>&1; do sleep 3; done;
+      echo 'Creating /data/input and /data/output in HDFS...';
+      hdfs dfs -mkdir -p /data/input /data/output;
+      echo 'Creating /spark-events in HDFS...';
+      hdfs dfs -mkdir -p /spark-events;
+      hdfs dfs -chmod -R 1777 /data /spark-events;
       if compgen -G '/opt/spark-data/input/*' > /dev/null; then
-        echo 'Seeding host input files into HDFS /data/input ...' ;
-        hdfs dfs -put -f /opt/spark-data/input/* /data/input/ ;
+        echo 'Seeding host input files into HDFS /data/input ...';
+        hdfs dfs -put -f /opt/spark-data/input/* /data/input/;
       else
-        echo 'No host seed files found under ./data/input – skipping seed.' ;
-      fi ;
+        echo 'No host seed files found under ./data/input – skipping seed.';
+      fi;
       echo 'HDFS init complete.'
       "
     restart: "no"
 
-
-  # ========================= KAFKA (with ZooKeeper) =========================
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: zk
@@ -113,7 +107,6 @@ services:
       - "9092:9092"
       - "29092:29092"
 
-  # ========================= SPARK (official image needs explicit commands) =========================
   spark-master:
     image: apache/spark:latest
     container_name: spark-master
@@ -123,22 +116,21 @@ services:
     environment:
       - SPARK_NO_DAEMONIZE=true
     ports:
-      - "8080:8080"     # Spark Master UI
-      - "7077:7077"     # Spark Master RPC
+      - "8080:8080"
+      - "7077:7077"
     volumes:
-      - ./apps:/opt/spark-apps
+      - ./services:/opt/services
       - ./data:/opt/spark-data
       - ./checkpoints:/opt/spark-checkpoints
       - ./spark-events:/tmp/spark-events
-      # Mount Hadoop client configs so Spark can access HDFS:
       - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
       - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
-    entrypoint: ["/bin/bash","-lc"]
+    entrypoint: ["/bin/bash", "-lc"]
     command: >
       "
-      exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
-        --host spark-master
-        --port 7077
+      exec /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master \
+        --host spark-master \
+        --port 7077 \
         --webui-port 8080
       "
 
@@ -150,9 +142,9 @@ services:
     environment:
       - SPARK_NO_DAEMONIZE=true
     ports:
-      - "8081:8081"     # worker-1 UI
+      - "8081:8081"
     volumes:
-      - ./apps:/opt/spark-apps
+      - ./services:/opt/services
       - ./data:/opt/spark-data
       - ./checkpoints:/opt/spark-checkpoints
       - ./spark-events:/tmp/spark-events
@@ -163,7 +155,8 @@ services:
       - org.apache.spark.deploy.worker.Worker
       - --webui-port
       - "8081"
-      - spark://spark-master:7077   # <-- REQUIRED last arg
+    command:
+      - spark://spark-master:7077
 
   spark-worker-2:
     image: apache/spark:latest
@@ -173,9 +166,9 @@ services:
     environment:
       - SPARK_NO_DAEMONIZE=true
     ports:
-      - "8082:8082"     # worker-2 UI
+      - "8082:8082"
     volumes:
-      - ./apps:/opt/spark-apps
+      - ./services:/opt/services
       - ./data:/opt/spark-data
       - ./checkpoints:/opt/spark-checkpoints
       - ./spark-events:/tmp/spark-events
@@ -186,8 +179,8 @@ services:
       - org.apache.spark.deploy.worker.Worker
       - --webui-port
       - "8082"
-      - spark://spark-master:7077   # <-- REQUIRED last arg
-
+    command:
+      - spark://spark-master:7077
 
   spark-history-server:
     image: apache/spark:latest
@@ -203,41 +196,9 @@ services:
       - /bin/bash
       - -lc
     command: >
-      SPARK_HISTORY_OPTS='-Dspark.history.fs.logDirectory=hdfs://namenode:8020/spark-events'
+      SPARK_HISTORY_OPTS='-Dspark.history.fs.logDirectory=hdfs://namenode:8020/spark-events' \
       exec /opt/spark/bin/spark-class org.apache.spark.deploy.history.HistoryServer
 
-  # --- One-shot batch analysis (reads HDFS input, writes HDFS + host CSV) ---
-  spark-app:
-    image: apache/spark:latest
-    container_name: spark-app
-    depends_on:
-      - spark-master
-      - spark-worker-1
-      - spark-worker-2
-      - hdfs-init
-      - kafka
-    environment:
-      - PYSPARK_PYTHON=python3
-      - PYSPARK_DRIVER_PYTHON=python3
-    volumes:
-      - ./apps:/opt/spark-apps
-      - ./data:/opt/spark-data
-      - ./checkpoints:/opt/spark-checkpoints
-      - ./spark-events:/tmp/spark-events
-      - ./conf/core-site.xml:/opt/spark/conf/core-site.xml:ro
-      - ./conf/hdfs-site.xml:/opt/spark/conf/hdfs-site.xml:ro
-    entrypoint:
-      - /bin/bash
-      - -lc
-      - |
-          echo 'Launching Spark batch job (input readiness handled in code)...';
-          exec /opt/spark/bin/spark-submit \
-            --master spark://spark-master:7077 \
-            --conf spark.eventLog.enabled=true \
-            --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
-            /opt/spark-apps/pipeline_batch.py
-
-  # --- Continuous Structured Streaming job reading Kafka 'sales' topic ---
   spark-stream:
     image: apache/spark:latest
     container_name: spark-stream
@@ -251,7 +212,7 @@ services:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
     volumes:
-      - ./apps:/opt/spark-apps
+      - ./services:/opt/services
       - ./data:/opt/spark-data
       - ./checkpoints:/opt/spark-checkpoints
       - ./spark-events:/tmp/spark-events
@@ -266,13 +227,12 @@ services:
             --master spark://spark-master:7077 \
             --conf spark.eventLog.enabled=true \
             --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
-            /opt/spark-apps/streaming_sales_aggregator.py
+            /opt/services/streaming/streaming_sales_aggregator.py
 
-  # --- Kafka event generator that replays CSV orders into the stream ---
   event-generator:
     build:
       context: .
-      dockerfile: producers/Dockerfile
+      dockerfile: services/event-generator/Dockerfile
     container_name: event-generator
     depends_on:
       - kafka
@@ -287,16 +247,3 @@ services:
     command:
       - --loop
       - --shuffle
-
-  # ========================= DASHBOARD (Flask + Chart.js) =========================
-  dashboard:
-    build: ./dashboard
-    container_name: retail-dashboard
-    depends_on:
-      - spark-app
-    ports:
-      - "5000:5000"
-    environment:
-      - OUTPUT_DIR=/opt/spark-data/output
-    volumes:
-      - ./data:/opt/spark-data
