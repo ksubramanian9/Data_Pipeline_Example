@@ -17,8 +17,15 @@ A complete, classroom‑ready demo that ingests retail transactions, cleans & ag
 │     └─ kafka_event_producer.py  # CSV → Kafka event generator script
 ├─ data/
 │  ├─ input/                      # Sample CSVs (already included)
-│  └─ output/                     # Spark writes host‑readable CSV here
+│  └─ output/                     # Batch CSV + streaming Parquet land here for dashboards
 ├─ dashboard/                     # Flask + Chart.js dashboard
+│  ├─ Dockerfile
+│  ├─ requirements.txt
+│  ├─ app.py
+│  └─ static/
+│     ├─ index.html
+│     └─ script.js
+├─ streaming_dashboard/           # Streaming-specific dashboard (Parquet reader)
 │  ├─ Dockerfile
 │  ├─ requirements.txt
 │  ├─ app.py
@@ -62,6 +69,7 @@ This will:
 - Spark History: http://localhost:18081
 - HDFS NameNode: http://localhost:9870
 - Dashboard: http://localhost:5000
+- Streaming Dashboard: http://localhost:5100
 
 ## Re‑running the batch
 If you change code or add more input CSVs:
@@ -81,20 +89,23 @@ The streaming compose file defines an end-to-end real-time flow:
   rate by setting `EVENTS_PER_SECOND` or override the command, e.g.
   `docker compose -f docker-compose.streaming.yml run event-generator --rate 20 --loop`.
 - **Structured Streaming (`spark-stream`)** consumes `sales`, applies the same cleaning logic, and maintains rolling
-  1-hour revenue totals per product with 15-minute hops. Aggregates land in HDFS at
-  `hdfs://namenode:8020/data/output/streaming_product_revenue` (set `STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue`
-  if you prefer a host-mounted directory).
+  1-hour revenue totals per product with 15-minute hops. In the provided compose file the job writes to the bind-mounted
+  path `file:///opt/spark-data/output/streaming_product_revenue` (shared as `./data/output/streaming_product_revenue` on the host)
+  so downstream apps can read the Parquet output without going through HDFS APIs.
 - **Connector jars**: the stock `apache/spark` image does not ship the Kafka datasource jars. The streaming job automatically
   requests `org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`. Override it with `SPARK_KAFKA_PACKAGE` or append more
   comma-separated coordinates via `SPARK_EXTRA_PACKAGES`.
-- **Dashboard** can be pointed at the streaming output by swapping its data source to the new Parquet path or by adding
-  another chart that reads the streaming parquet files.
+- **Streaming dashboard** (`streaming-dashboard`) reads the Parquet output directly and renders live revenue timelines,
+  product leaderboards, and window health indicators at http://localhost:5100.
 
 To run the streaming stack (Kafka + Spark Structured Streaming + producer), use the dedicated compose file:
 
 ```bash
-docker compose -f docker-compose.streaming.yml up --build spark-stream event-generator
+docker compose -f docker-compose.streaming.yml up --build spark-stream event-generator streaming-dashboard
 ```
+
+After ~15 minutes you will have several dozen windows spanning multiple products; open http://localhost:5100 to watch the
+rolling revenue chart and leaderboards update as new micro-batches arrive.
 
 ## Teaching prompts
 - *Partitioning*: Why do we partition Parquet by `order_date`? Try adding another month and observe file layout.

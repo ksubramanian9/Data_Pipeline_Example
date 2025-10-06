@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Streaming Revenue Monitor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      --bg: #0f172a;
+      --surface: rgba(15, 23, 42, 0.85);
+      --card: rgba(15, 23, 42, 0.9);
+      --card-border: rgba(148, 163, 184, 0.18);
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.18);
+      --positive: #4ade80;
+      --warning: #facc15;
+      --danger: #f87171;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top right, rgba(129, 140, 248, 0.35), transparent 55%),
+        radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.4), transparent 45%),
+        linear-gradient(160deg, #0b1220 0%, #111c34 55%, #0b1220 100%);
+      color: #e2e8f0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 24px clamp(16px, 5vw, 48px);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(20px, 2.2vw, 30px);
+      letter-spacing: -0.01em;
+      font-weight: 600;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.2);
+      color: #5eead4;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .status[data-state="loading"] { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
+    .status[data-state="no_data"] { background: rgba(234, 179, 8, 0.25); color: #facc15; }
+    .status[data-state="error"] { background: rgba(248, 113, 113, 0.25); color: #f87171; }
+
+    main {
+      flex: 1;
+      padding: 0 clamp(16px, 5vw, 48px) 48px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+      width: 100%;
+      margin: 0 auto 48px;
+      max-width: 1280px;
+    }
+
+    .card {
+      background: var(--surface);
+      border-radius: 22px;
+      border: 1px solid var(--card-border);
+      padding: 24px;
+      box-shadow: 0 25px 60px rgba(15, 23, 42, 0.35);
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      backdrop-filter: blur(22px);
+    }
+
+    .card.full {
+      grid-column: 1 / -1;
+    }
+
+    .card h3 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .chart-container {
+      position: relative;
+      width: 100%;
+      min-height: 260px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+    }
+
+    .metric {
+      padding: 16px;
+      border-radius: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(15, 23, 42, 0.55);
+    }
+
+    .metric span {
+      display: block;
+    }
+
+    .metric .label {
+      font-size: 13px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .metric .value {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .metric .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    ul.leaderboard {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    ul.leaderboard li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      font-size: 15px;
+    }
+
+    ul.leaderboard li span.product {
+      font-weight: 500;
+    }
+
+    ul.leaderboard li span.revenue {
+      font-variant-numeric: tabular-nums;
+    }
+
+    table.health {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    table.health th,
+    table.health td {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    table.health tbody tr:hover {
+      background: rgba(59, 130, 246, 0.14);
+    }
+
+    .table-wrapper {
+      border-radius: 18px;
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      overflow: auto;
+      max-height: 320px;
+      background: rgba(15, 23, 42, 0.45);
+    }
+
+    #emptyState {
+      padding: 24px;
+      border-radius: 18px;
+      border: 1px dashed rgba(148, 163, 184, 0.4);
+      background: rgba(15, 23, 42, 0.45);
+      color: var(--muted);
+      text-align: center;
+      font-size: 15px;
+    }
+
+    footer {
+      margin-top: auto;
+      padding: 0 clamp(16px, 5vw, 48px) 32px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    @media (max-width: 768px) {
+      main { padding-bottom: 32px; }
+      .chart-container { min-height: 220px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Streaming Revenue Monitor</h1>
+    <div class="status" id="status" data-state="loading">Connecting to stream…</div>
+  </header>
+
+  <main>
+    <section class="card full" id="emptyState" hidden>
+      Waiting for streaming aggregates to land… start the pipeline and this dashboard will populate automatically.
+    </section>
+
+    <section class="card" id="timelineCard">
+      <div>
+        <h3>Rolling product revenue</h3>
+        <p>1-hour windows, updated every 15 minutes</p>
+      </div>
+      <div class="chart-container">
+        <canvas id="timelineChart"></canvas>
+      </div>
+      <p class="muted" id="lastUpdated">Last updated —</p>
+    </section>
+
+    <section class="card" id="metricsCard">
+      <div>
+        <h3>Stream snapshot</h3>
+        <p>Quick stats from the latest published window</p>
+      </div>
+      <div class="metrics" id="metrics"></div>
+    </section>
+
+    <section class="card" id="leaderboardCard">
+      <div>
+        <h3>Top movers</h3>
+        <p>Highest revenue products in the freshest window</p>
+      </div>
+      <ul class="leaderboard" id="leaderboard"></ul>
+    </section>
+
+    <section class="card full" id="healthCard">
+      <div>
+        <h3>Window health</h3>
+        <p>Recent windows with product coverage</p>
+      </div>
+      <div class="table-wrapper">
+        <table class="health">
+          <thead>
+            <tr>
+              <th>Window start</th>
+              <th>Window end</th>
+              <th>Total revenue</th>
+              <th>Unique products</th>
+            </tr>
+          </thead>
+          <tbody id="healthBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    Powered by Spark Structured Streaming → Kafka → HDFS
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"></script>
+  <script src="/static/script.js"></script>
+</body>
+</html>
