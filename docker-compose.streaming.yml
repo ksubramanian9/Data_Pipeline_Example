@@ -229,6 +229,7 @@ services:
             --master spark://spark-master:7077 \
             --conf spark.eventLog.enabled=true \
             --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
+            --packages ${SPARK_KAFKA_PACKAGE:-org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1} \
             /opt/services/streaming/streaming_sales_aggregator.py
 
   event-generator:
