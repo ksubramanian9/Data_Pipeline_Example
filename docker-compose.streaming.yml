@@ -232,7 +232,12 @@ services:
           fi
           if ! mkdir -p "${IVY_DIR}/cache" "${IVY_DIR}/jars"; then
             echo "Failed to create Ivy cache directories under ${IVY_DIR}" >&2
-            exit 1
+            IVY_DIR="/tmp/.ivy2"
+            echo "Falling back to default Ivy cache directory ${IVY_DIR}" >&2
+            if ! mkdir -p "${IVY_DIR}/cache" "${IVY_DIR}/jars"; then
+              echo "Unable to create fallback Ivy cache directories under ${IVY_DIR}" >&2
+              exit 1
+            fi
           fi
           echo "Using Ivy cache directory ${IVY_DIR}"
           exec /opt/spark/bin/spark-submit \
