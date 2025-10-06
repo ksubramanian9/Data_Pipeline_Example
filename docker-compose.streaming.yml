@@ -213,6 +213,7 @@ services:
       - PYSPARK_DRIVER_PYTHON=python3
       - STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue
       - STREAM_CHECKPOINT_DIR=/opt/spark-checkpoints/streaming_sales
+      - SPARK_IVY_DIR=/tmp/spark-ivy
     volumes:
       - ./services:/opt/services
       - ./data:/opt/spark-data
@@ -225,10 +226,20 @@ services:
       - -lc
       - |
           echo 'Launching Spark streaming job (Kafka -> HDFS aggregates)...';
+          IVY_DIR="${SPARK_IVY_DIR:-/tmp/.ivy2}"
+          if [ -z "${IVY_DIR}" ]; then
+            IVY_DIR="/tmp/.ivy2"
+          fi
+          if ! mkdir -p "${IVY_DIR}/cache" "${IVY_DIR}/jars"; then
+            echo "Failed to create Ivy cache directories under ${IVY_DIR}" >&2
+            exit 1
+          fi
+          echo "Using Ivy cache directory ${IVY_DIR}"
           exec /opt/spark/bin/spark-submit \
             --master spark://spark-master:7077 \
             --conf spark.eventLog.enabled=true \
             --conf spark.eventLog.dir=hdfs://namenode:8020/spark-events \
+            --conf spark.jars.ivy=${IVY_DIR} \
             --packages ${SPARK_KAFKA_PACKAGE:-org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1} \
             /opt/services/streaming/streaming_sales_aggregator.py
 
