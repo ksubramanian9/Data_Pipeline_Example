@@ -190,6 +190,9 @@ def main() -> None:
     logger.info(
         "Subscribing to Kafka topic '%s' at %s", KAFKA_TOPIC, KAFKA_BOOTSTRAP
     )
+    logger.info(
+        "Kafka reader startingOffsets set to '%s'", os.environ.get("KAFKA_STARTING_OFFSETS", "latest")
+    )
 
     raw_stream = (
         spark.readStream
@@ -200,11 +203,15 @@ def main() -> None:
         .load()
     )
 
+    logger.info("Kafka source schema: %s", raw_stream.schema.simpleString())
+
     parsed_stream = (
         raw_stream
         .select(from_json(col("value").cast("string"), EVENT_SCHEMA).alias("event"))
         .select("event.*")
     )
+
+    logger.info("Configured event schema with fields: %s", ", ".join(field.name for field in EVENT_SCHEMA))
 
     cleaned = transform_orders(parsed_stream)
     aggregates = build_aggregations(cleaned)
@@ -223,6 +230,7 @@ def main() -> None:
         CHECKPOINT_DIR,
         OUTPUT_PATH,
     )
+    logger.info("Streaming query output mode: append")
 
     query.start().awaitTermination()
 
