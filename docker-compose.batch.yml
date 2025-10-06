@@ -1,4 +1,23 @@
 services:
+  data-generator:
+    image: python:3.11-slim
+    container_name: batch-data-generator
+    restart: "no"
+    working_dir: /opt/services/batch
+    entrypoint:
+      - python
+      - generate_synthetic_data.py
+    command:
+      - --output
+      - /opt/spark-data/input
+      - --days
+      - "30"
+      - --transactions-per-day
+      - "36"
+    volumes:
+      - ./services:/opt/services:ro
+      - ./data:/opt/spark-data
+
   namenode:
     image: apache/hadoop:3.3.6
     container_name: namenode
@@ -52,6 +71,8 @@ services:
     image: apache/hadoop:3.3.6
     container_name: hdfs-init
     depends_on:
+      data-generator:
+        condition: service_completed_successfully
       namenode:
         condition: service_healthy
     user: "0:0"
