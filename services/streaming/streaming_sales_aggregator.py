@@ -16,9 +16,11 @@ from typing import Optional
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
+    coalesce,
     col,
     from_json,
     lit,
+    regexp_replace,
     round as round_,
     sum as sum_,
     to_date,
@@ -120,7 +122,20 @@ def transform_orders(df: DataFrame) -> DataFrame:
     if ts_expr is None:
         df = df.withColumn("order_ts", to_timestamp(lit("1970-01-01 00:00:00")))
     else:
-        df = df.withColumn("order_ts", to_timestamp(ts_expr))
+        ts_text = trim(ts_expr.cast("string"))
+        ts_spaced = regexp_replace(ts_text, "T", " ")
+        df = df.withColumn(
+            "order_ts",
+            coalesce(
+                to_timestamp(ts_text),
+                to_timestamp(ts_spaced),
+                to_timestamp(ts_text, "yyyy-MM-dd'T'HH:mm:ss"),
+                to_timestamp(ts_text, "yyyy-MM-dd'T'HH:mm:ss.SSS"),
+                to_timestamp(ts_text, "yyyy-MM-dd'T'HH:mm:ssXXX"),
+                to_timestamp(ts_text, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+                to_timestamp(ts_text, "yyyy-MM-dd"),
+            ),
+        )
 
     df = df.withColumn("order_date", to_date(col("order_ts")))
 
@@ -196,7 +211,7 @@ def main() -> None:
 
     query = (
         aggregates.writeStream
-        .outputMode("update")
+        .outputMode("append")
         .format("parquet")
         .option("path", OUTPUT_PATH)
         .option("checkpointLocation", CHECKPOINT_DIR)
