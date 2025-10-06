@@ -146,8 +146,8 @@ def main():
             break
 
     if date_col is None:
-        logger.info("Date column missing — defaulting order_date to epoch")
-        df = df.withColumn("order_date", to_date(lit("1970-01-01")))
+        logger.warning("Date column missing — rows will be dropped from the analysis")
+        df = df.withColumn("order_date", lit(None).cast("date"))
     else:
         logger.info("Parsing order timestamps from '%s'", date_col)
         date_raw = trim(col(date_col))
@@ -165,11 +165,16 @@ def main():
                       to_date(
                           when(yyyymmdd_token != "", yyyymmdd_token),
                           "yyyyMMdd"
-                      ),
-                      to_date(lit("1970-01-01"))
+                      )
                   )
               )
               .drop("order_ts"))
+
+    invalid_dates = df.filter(col("order_date").isNull())
+    invalid_count = invalid_dates.count()
+    if invalid_count:
+        logger.warning("Dropping %d row(s) with missing or unparseable order_date", invalid_count)
+    df = df.filter(col("order_date").isNotNull())
 
     has_amount = "amount" in cols
     has_qty_price = ("quantity" in cols) and ("unit_price" in cols or "price" in cols)
