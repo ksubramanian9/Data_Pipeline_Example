@@ -7,8 +7,8 @@ import time
 from py4j.protocol import Py4JJavaError
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, coalesce, expr, to_date, to_timestamp, trim,
-    when, lit, round as round_, sum as sum_, countDistinct
+    col, coalesce, expr, to_date, trim,
+    when, lit, round as round_, sum as sum_, countDistinct, regexp_extract
 )
 from pyspark.sql.types import DoubleType
 
@@ -150,14 +150,25 @@ def main():
         df = df.withColumn("order_date", to_date(lit("1970-01-01")))
     else:
         logger.info("Parsing order timestamps from '%s'", date_col)
+        date_raw = trim(col(date_col))
+        order_ts = expr(f"try_cast(`{date_col}` AS timestamp)")
+        order_date_direct = expr(f"try_cast(`{date_col}` AS date)")
+        yyyymmdd_token = regexp_extract(date_raw, r"^(\\d{8})", 1)
+
         df = (df
-              .withColumn("order_ts",
-                          when(col(date_col).cast("timestamp").isNotNull(),
-                               to_timestamp(col(date_col)))
-                          .otherwise(None))
-              .withColumn("order_date",
-                          when(col("order_ts").isNotNull(), col("order_ts").cast("date"))
-                          .otherwise(to_date(col(date_col))))
+              .withColumn("order_ts", order_ts)
+              .withColumn(
+                  "order_date",
+                  coalesce(
+                      to_date(col("order_ts")),
+                      order_date_direct,
+                      to_date(
+                          when(yyyymmdd_token != "", yyyymmdd_token),
+                          "yyyyMMdd"
+                      ),
+                      to_date(lit("1970-01-01"))
+                  )
+              )
               .drop("order_ts"))
 
     has_amount = "amount" in cols
