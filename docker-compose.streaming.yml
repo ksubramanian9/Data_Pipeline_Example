@@ -252,8 +252,8 @@ services:
 
   streaming-dashboard:
     build:
-      context: .
-      dockerfile: streaming_dashboard/Dockerfile
+      context: ./streaming_dashboard
+      dockerfile: Dockerfile
     container_name: streaming-dashboard
     depends_on:
       - spark-stream
