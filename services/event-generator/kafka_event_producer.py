@@ -52,6 +52,11 @@ class EventProducer:
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
             linger_ms=100,
         )
+        logger.debug(
+            "Initialised KafkaProducer for topic '%s' on bootstrap servers '%s'",
+            config.topic,
+            config.bootstrap_servers,
+        )
 
     def _discover_csv_files(self) -> List[Path]:
         files = sorted(self._config.input_dir.glob("*.csv"))
@@ -59,6 +64,9 @@ class EventProducer:
             raise FileNotFoundError(
                 f"No CSV files found under {self._config.input_dir}"
             )
+        logger.info(
+            "Discovered %d CSV file(s) under %s", len(files), self._config.input_dir
+        )
         return files
 
     def _iter_rows(self, files: Iterable[Path]) -> Iterator[Dict[str, str]]:
@@ -92,6 +100,11 @@ class EventProducer:
             self._config.shuffle,
             self._config.loop,
         )
+        logger.info(
+            "Publishing events to topic '%s' via bootstrap servers '%s'",
+            self._config.topic,
+            self._config.bootstrap_servers,
+        )
 
         rows = list(self._iter_rows(files))
         if self._config.shuffle:
@@ -106,6 +119,12 @@ class EventProducer:
                     payload = self._normalise_row(row)
                     self._producer.send(self._config.topic, payload)
                     sent += 1
+                    if sent == 1:
+                        logger.info(
+                            "Sent first event to topic '%s' with keys: %s",
+                            self._config.topic,
+                            ", ".join(sorted(payload.keys())),
+                        )
                     if sent % 100 == 0:
                         logger.info("Published %d events", sent)
                     if delay > 0:
