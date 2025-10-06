@@ -8,10 +8,12 @@ existing dashboard (or other tools) can use the aggregated outputs.
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
+import re
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
@@ -53,7 +55,37 @@ OUTPUT_PATH = os.environ.get("STREAM_OUTPUT_PATH", "hdfs://namenode:8020/data/ou
 # The Kafka connector jars are not bundled with the vanilla Spark image.
 # Use the official artifact that matches the Spark/Scala version and allow
 # callers to override via environment variables when needed.
-DEFAULT_KAFKA_PACKAGE = "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1"
+DEFAULT_SCALA_BINARY = "2.12"
+DEFAULT_SPARK_VERSION = "3.5.1"
+
+
+def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
+    """Infer the Scala binary version and Spark version for bundled jars."""
+
+    env_scala = os.environ.get("SPARK_SCALA_VERSION")
+    env_spark = os.environ.get("SPARK_VERSION")
+    if env_scala and env_spark:
+        return env_scala.strip(), env_spark.strip()
+
+    spark_home = os.environ.get("SPARK_HOME")
+    if spark_home:
+        jar_patterns = [
+            os.path.join(spark_home, "jars", "spark-sql_*.jar"),
+            os.path.join(spark_home, "jars", "spark-core_*.jar"),
+        ]
+        for pattern in jar_patterns:
+            for jar_path in sorted(glob.glob(pattern)):
+                filename = os.path.basename(jar_path)
+                match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
+                if match:
+                    return match.group(1), match.group(2)
+
+    return DEFAULT_SCALA_BINARY, DEFAULT_SPARK_VERSION
+
+
+def _default_kafka_package() -> str:
+    scala_bin, spark_version = _infer_spark_artifact_coordinates()
+    return f"org.apache.spark:spark-sql-kafka-0-10_{scala_bin}:{spark_version}"
 
 
 def build_spark_session() -> SparkSession:
@@ -69,7 +101,7 @@ def build_spark_session() -> SparkSession:
     # the Kafka connector is available. Additional packages can be supplied via
     # SPARK_EXTRA_PACKAGES (comma-separated) without losing the default.
     if "SPARK_JARS_PACKAGES" not in os.environ:
-        kafka_package = os.environ.get("SPARK_KAFKA_PACKAGE", DEFAULT_KAFKA_PACKAGE)
+        kafka_package = os.environ.get("SPARK_KAFKA_PACKAGE", _default_kafka_package())
         extra_packages = os.environ.get("SPARK_EXTRA_PACKAGES", "").strip()
         packages = ",".join(
             pkg

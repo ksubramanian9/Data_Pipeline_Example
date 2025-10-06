@@ -106,8 +106,9 @@ The streaming compose file defines an end-to-end real-time flow:
   path `file:///opt/spark-data/output/streaming_product_revenue` (shared as `./data/output/streaming_product_revenue` on the host)
   so downstream apps can read the Parquet output without going through HDFS APIs.
 - **Connector jars**: the stock `apache/spark` image does not ship the Kafka datasource jars. The streaming job automatically
-  requests `org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1`. Override it with `SPARK_KAFKA_PACKAGE` or append more
-  comma-separated coordinates via `SPARK_EXTRA_PACKAGES`.
+  inspects the bundled Spark jars and requests the matching
+  `org.apache.spark:spark-sql-kafka-0-10_<scala-binary>:<spark-version>` coordinate. Override it with `SPARK_KAFKA_PACKAGE`
+  or append more comma-separated coordinates via `SPARK_EXTRA_PACKAGES`.
 - **Streaming dashboard** (`streaming-dashboard`) reads the Parquet output directly and renders live revenue timelines,
   product leaderboards, and window health indicators at http://localhost:5100.
 
