@@ -15,6 +15,8 @@ import re
 import sys
 from typing import Optional, Tuple
 
+import pyspark
+
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
@@ -59,6 +61,27 @@ DEFAULT_SCALA_BINARY = "2.12"
 DEFAULT_SPARK_VERSION = "3.5.1"
 
 
+def _find_coordinates_from_jars(jar_root: str) -> Optional[Tuple[str, str]]:
+    """Return Scala and Spark versions inferred from Spark jar names."""
+
+    if not jar_root or not os.path.isdir(jar_root):
+        return None
+
+    jar_patterns = [
+        os.path.join(jar_root, "spark-sql_*.jar"),
+        os.path.join(jar_root, "spark-core_*.jar"),
+    ]
+
+    for pattern in jar_patterns:
+        for jar_path in sorted(glob.glob(pattern)):
+            filename = os.path.basename(jar_path)
+            match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
+            if match:
+                return match.group(1), match.group(2)
+
+    return None
+
+
 def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
     """Infer the Scala binary version and Spark version for bundled jars."""
 
@@ -69,16 +92,15 @@ def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
 
     spark_home = os.environ.get("SPARK_HOME")
     if spark_home:
-        jar_patterns = [
-            os.path.join(spark_home, "jars", "spark-sql_*.jar"),
-            os.path.join(spark_home, "jars", "spark-core_*.jar"),
-        ]
-        for pattern in jar_patterns:
-            for jar_path in sorted(glob.glob(pattern)):
-                filename = os.path.basename(jar_path)
-                match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
-                if match:
-                    return match.group(1), match.group(2)
+        jars_root = os.path.join(spark_home, "jars")
+        inferred = _find_coordinates_from_jars(jars_root)
+        if inferred:
+            return inferred
+
+    pyspark_dir = os.path.dirname(pyspark.__file__)
+    inferred = _find_coordinates_from_jars(os.path.join(pyspark_dir, "jars"))
+    if inferred:
+        return inferred
 
     return DEFAULT_SCALA_BINARY, DEFAULT_SPARK_VERSION
 
