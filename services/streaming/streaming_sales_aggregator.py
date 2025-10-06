@@ -196,7 +196,7 @@ def main() -> None:
 
     query = (
         aggregates.writeStream
-        .outputMode("update")
+        .outputMode("append")
         .format("parquet")
         .option("path", OUTPUT_PATH)
         .option("checkpointLocation", CHECKPOINT_DIR)
