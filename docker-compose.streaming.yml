@@ -212,7 +212,8 @@ services:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
       - STREAM_OUTPUT_PATH=file:///opt/spark-data/output/streaming_product_revenue
-      - STREAM_CHECKPOINT_DIR=/opt/spark-checkpoints/streaming_sales
+      # - STREAM_CHECKPOINT_DIR=/opt/spark-checkpoints/streaming_sales
+      - STREAM_CHECKPOINT_DIR=hdfs://namenode:8020/user/spark/checkpoints/streaming_sales
       - SPARK_IVY_DIR=/tmp/spark-ivy
     volumes:
       - ./services:/opt/services
