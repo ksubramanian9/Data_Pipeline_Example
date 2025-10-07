@@ -310,6 +310,10 @@ def main() -> None:
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
         .option("subscribe", KAFKA_TOPIC)
         .option("startingOffsets", os.environ.get("KAFKA_STARTING_OFFSETS", "latest"))
+        # Avoid failing the query if Kafka has already aged out old offsets. In production
+        # this should be paired with robust checkpointing/monitoring, but for local demos
+        # we prefer continuity over strict failure semantics.
+        .option("failOnDataLoss", "false")
         .load()
     )
 
