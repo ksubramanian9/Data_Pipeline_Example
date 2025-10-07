@@ -17,8 +17,6 @@ from typing import Iterable, List, Optional, Tuple
 
 import pyspark
 
-import pyspark
-
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
 from pyspark.sql.functions import (
@@ -89,28 +87,6 @@ def _find_coordinates_from_jars(jar_root: str) -> Optional[Tuple[str, str]]:
 
     return None
 
-
-def _find_coordinates_from_jars(jar_root: str) -> Optional[Tuple[str, str]]:
-    """Return Scala and Spark versions inferred from Spark jar names."""
-
-    if not jar_root or not os.path.isdir(jar_root):
-        return None
-
-    jar_patterns = [
-        os.path.join(jar_root, "spark-sql_*.jar"),
-        os.path.join(jar_root, "spark-core_*.jar"),
-    ]
-
-    for pattern in jar_patterns:
-        for jar_path in sorted(glob.glob(pattern)):
-            filename = os.path.basename(jar_path)
-            match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
-            if match:
-                return match.group(1), match.group(2)
-
-    return None
-
-
 def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
     """Infer the Scala binary version and Spark version for bundled jars."""
 
@@ -171,7 +147,8 @@ def build_spark_session() -> SparkSession:
     # when bundled, with remote packages as a last resort. Additional packages
     # can be supplied via SPARK_EXTRA_PACKAGES (comma-separated) without losing
     # the default.
-    if "SPARK_JARS_PACKAGES" not in os.environ:
+    # if "SPARK_JARS_PACKAGES" not in os.environ:
+    if not os.environ.get("SPARK_JARS_PACKAGES"):
         candidate_roots = [
             os.environ.get("SPARK_HOME"),
             os.environ.get("SPARK_KAFKA_JAR_DIR"),
@@ -301,14 +278,24 @@ def build_aggregations(df: DataFrame) -> DataFrame:
         .select(
             col("product"),
             round_(col("revenue"), 2).alias("revenue"),
-            col("time_window.start").alias("window_start"),
-            col("time_window.end").alias("window_end"),
+            # col("time_window.start").alias("window_start"),
+            # col("time_window.end").alias("window_end"),
+            col("time_window").getField("start").alias("window_start"),
+            col("time_window").getField("end").alias("window_end"),
         )
     )
 
 
 def main() -> None:
     spark = build_spark_session()
+
+    logger.info("Spark version: %s, Scala: %s", spark.version, _infer_spark_artifact_coordinates()[0])
+    try:
+        spark._jvm.org.apache.spark.sql.kafka010.KafkaSourceProvider  # type: ignore[attr-defined]
+        logger.info("Kafka connector present.")
+    except Exception:
+        logger.error("Kafka connector missing/incompatible. Check Spark/Scala vs spark-sql-kafka package.")
+        raise
 
     logger.info(
         "Subscribing to Kafka topic '%s' at %s", KAFKA_TOPIC, KAFKA_BOOTSTRAP
