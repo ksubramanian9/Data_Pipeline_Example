@@ -39,6 +39,12 @@ A complete, classroom‑ready demo that ingests retail transactions, cleans & ag
 └─ spark-events/                  # Spark event logs (history server)
 ```
 
+## Version pinning
+
+The Docker Compose files read Spark and Kafka image tags from the top-level `.env` file. Update `SPARK_VERSION` (Apache
+Spark) and `CONFLUENT_PLATFORM_VERSION` (Kafka/ZooKeeper via Confluent Platform) there to make the new versions apply to
+every service without editing individual Compose files.
+
 ## Start the containers one by one
 ```bash
 docker compose -f docker-compose.batch.yml up -d namenode datanode
