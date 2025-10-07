@@ -39,8 +39,8 @@ def api_daily():
         df.groupby("product")["total_amount"]
           .sum().reset_index().sort_values("total_amount", ascending=False).head(10)
     )
-    # sample table
-    sample_rows = df.sort_values(["order_date","product"]).head(50)
+    # sample table - show most recent orders first
+    sample_rows = df.sort_values(["order_date", "product"], ascending=[False, True]).head(50)
 
     return jsonify({
         "status": "ok",

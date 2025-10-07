@@ -1,4 +1,8 @@
-const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const currencyFormatter = new Intl.NumberFormat('en-IN', {
+  style: 'currency',
+  currency: 'INR',
+  maximumFractionDigits: 0,
+});
 
 Chart.defaults.font.family = "Inter, system-ui, -apple-system, Segoe UI, Roboto";
 Chart.defaults.color = '#1f2937';
