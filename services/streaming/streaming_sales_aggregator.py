@@ -13,7 +13,9 @@ import logging
 import os
 import re
 import sys
-from typing import Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
+
+import pyspark
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.column import Column
@@ -58,6 +60,33 @@ OUTPUT_PATH = os.environ.get("STREAM_OUTPUT_PATH", "hdfs://namenode:8020/data/ou
 DEFAULT_SCALA_BINARY = "2.12"
 DEFAULT_SPARK_VERSION = "3.5.1"
 
+# Known Kafka connector jar basenames that should be provided together
+KAFKA_CONNECTOR_JARS = (
+    "spark-sql-kafka-0-10_",
+    "spark-token-provider-kafka-0-10_",
+)
+
+
+def _find_coordinates_from_jars(jar_root: str) -> Optional[Tuple[str, str]]:
+    """Return Scala and Spark versions inferred from Spark jar names."""
+
+    if not jar_root or not os.path.isdir(jar_root):
+        return None
+
+    jar_patterns = [
+        os.path.join(jar_root, "spark-sql_*.jar"),
+        os.path.join(jar_root, "spark-core_*.jar"),
+    ]
+
+    for pattern in jar_patterns:
+        for jar_path in sorted(glob.glob(pattern)):
+            filename = os.path.basename(jar_path)
+            match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
+            if match:
+                return match.group(1), match.group(2)
+
+    return None
+
 
 def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
     """Infer the Scala binary version and Spark version for bundled jars."""
@@ -69,18 +98,35 @@ def _infer_spark_artifact_coordinates() -> Tuple[str, str]:
 
     spark_home = os.environ.get("SPARK_HOME")
     if spark_home:
-        jar_patterns = [
-            os.path.join(spark_home, "jars", "spark-sql_*.jar"),
-            os.path.join(spark_home, "jars", "spark-core_*.jar"),
-        ]
-        for pattern in jar_patterns:
-            for jar_path in sorted(glob.glob(pattern)):
-                filename = os.path.basename(jar_path)
-                match = re.search(r"_(\d+\.\d+)-(\d+\.\d+\.\d+)", filename)
-                if match:
-                    return match.group(1), match.group(2)
+        jars_root = os.path.join(spark_home, "jars")
+        inferred = _find_coordinates_from_jars(jars_root)
+        if inferred:
+            return inferred
+
+    pyspark_dir = os.path.dirname(pyspark.__file__)
+    inferred = _find_coordinates_from_jars(os.path.join(pyspark_dir, "jars"))
+    if inferred:
+        return inferred
 
     return DEFAULT_SCALA_BINARY, DEFAULT_SPARK_VERSION
+
+
+def _discover_local_kafka_jars(roots: Iterable[str]) -> List[str]:
+    """Return absolute paths to bundled Kafka connector jars if present."""
+
+    discovered: List[str] = []
+    for root in roots:
+        if not root:
+            continue
+        jars_dir = os.path.join(root, "jars") if os.path.isdir(root) and not root.endswith(".jar") else root
+        if not os.path.isdir(jars_dir):
+            continue
+        for base in KAFKA_CONNECTOR_JARS:
+            pattern = os.path.join(jars_dir, f"{base}*.jar")
+            matches = sorted(glob.glob(pattern))
+            discovered.extend(matches)
+
+    return sorted(dict.fromkeys(discovered))
 
 
 def _default_kafka_package() -> str:
@@ -98,18 +144,40 @@ def build_spark_session() -> SparkSession:
     )
 
     # Honour an explicit SPARK_JARS_PACKAGES if provided, otherwise make sure
-    # the Kafka connector is available. Additional packages can be supplied via
-    # SPARK_EXTRA_PACKAGES (comma-separated) without losing the default.
+    # the Kafka connector is available. Prefer local jars (matching the runtime)
+    # when bundled, with remote packages as a last resort. Additional packages
+    # can be supplied via SPARK_EXTRA_PACKAGES (comma-separated) without losing
+    # the default.
     if "SPARK_JARS_PACKAGES" not in os.environ:
-        kafka_package = os.environ.get("SPARK_KAFKA_PACKAGE", _default_kafka_package())
-        extra_packages = os.environ.get("SPARK_EXTRA_PACKAGES", "").strip()
-        packages = ",".join(
-            pkg
-            for pkg in [kafka_package, extra_packages]
-            if pkg
-        )
-        if packages:
-            builder = builder.config("spark.jars.packages", packages)
+        candidate_roots = [
+            os.environ.get("SPARK_HOME"),
+            os.environ.get("SPARK_KAFKA_JAR_DIR"),
+            os.path.dirname(pyspark.__file__),
+        ]
+        local_jars = _discover_local_kafka_jars(candidate_roots)
+        extra_jars = [
+            path.strip()
+            for path in os.environ.get("SPARK_EXTRA_JARS", "").split(",")
+            if path.strip()
+        ]
+        if local_jars or extra_jars:
+            jars_value = ",".join(local_jars + extra_jars)
+            builder = builder.config("spark.jars", jars_value)
+            if local_jars:
+                logger.info("Using bundled Kafka connector jars: %s", ", ".join(local_jars))
+            if extra_jars:
+                logger.info("Including additional Spark jars: %s", ", ".join(extra_jars))
+        if not local_jars:
+            kafka_package = os.environ.get("SPARK_KAFKA_PACKAGE", _default_kafka_package())
+            extra_packages = os.environ.get("SPARK_EXTRA_PACKAGES", "").strip()
+            packages = ",".join(
+                pkg
+                for pkg in [kafka_package, extra_packages]
+                if pkg
+            )
+            if packages:
+                builder = builder.config("spark.jars.packages", packages)
+                logger.info("Using Kafka connector packages: %s", packages)
 
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
