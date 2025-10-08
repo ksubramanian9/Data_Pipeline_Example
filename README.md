@@ -97,6 +97,18 @@ docker compose -f docker-compose.batch.yml up --build spark-app
 ```
 The new output appears under `./data/output/analysis_csv/` and in HDFS under `/data/output/analysis_parquet`.
 
+## Cleaning up generated data
+
+Use the helper script to wipe the bind-mounted folders (input/output data,
+HDFS volumes, checkpoints, and Spark event logs) so the next run starts fresh:
+
+```bash
+python cleanup_demo_data.py
+```
+
+Pass `--dry-run` to see which paths would be cleared without deleting
+anything.
+
 ## Switching to local paths (skip HDFS)
 In `services/batch/pipeline_batch.py`, set `USE_HDFS = False`. The job will read/write only from the bind‑mounted `./data` directory.
 
