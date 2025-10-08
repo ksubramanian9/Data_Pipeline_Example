@@ -19,7 +19,7 @@ services:
       - ./data:/opt/spark-data
 
   namenode:
-    image: apache/hadoop:3.3.6
+    image: apache/hadoop:${HADOOP_VERSION}
     container_name: namenode
     user: "0:0"
     ports:
@@ -48,7 +48,7 @@ services:
       retries: 20
 
   datanode:
-    image: apache/hadoop:3.3.6
+    image: apache/hadoop:${HADOOP_VERSION}
     container_name: datanode
     user: "0:0"
     depends_on:
@@ -68,7 +68,7 @@ services:
       "
 
   hdfs-init:
-    image: apache/hadoop:3.3.6
+    image: apache/hadoop:${HADOOP_VERSION}
     container_name: hdfs-init
     depends_on:
       data-generator:
