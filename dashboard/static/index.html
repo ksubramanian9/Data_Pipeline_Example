@@ -122,13 +122,13 @@
 </head>
 <body>
   <header>
-    <h1>Retail Analytics Dashboard <span class="muted">— Spark + HDFS</span></h1>
+    <h1><span id="datasetTitle">Synthetic Dataset</span> Dashboard <span class="muted">— Spark + HDFS</span></h1>
   </header>
   <main>
     <section class="card">
       <div>
-        <h3>Revenue by Day</h3>
-        <p class="muted">Overall daily revenue trend</p>
+        <h3 id="chartDailyTitle">Metric by Day</h3>
+        <p class="muted" id="chartDailySubtitle">Daily totals across the configured dataset</p>
       </div>
       <div class="chart-container">
         <canvas id="chartDaily"></canvas>
@@ -136,8 +136,8 @@
     </section>
     <section class="card">
       <div>
-        <h3>Top 10 Products</h3>
-        <p class="muted">Highest grossing products</p>
+        <h3 id="chartSegmentsTitle">Top Segments</h3>
+        <p class="muted" id="chartSegmentsSubtitle">Highest value dimension combinations</p>
       </div>
       <div class="chart-container">
         <canvas id="chartProducts"></canvas>
@@ -145,8 +145,8 @@
     </section>
     <section class="card full">
       <div>
-        <h3>Sample Output Rows</h3>
-        <p class="muted">Latest processed orders</p>
+        <h3 id="tableTitle">Sample Output Rows</h3>
+        <p class="muted" id="tableSubtitle">Recent aggregated slices with record counts</p>
       </div>
       <div id="table" class="table-wrapper"></div>
     </section>

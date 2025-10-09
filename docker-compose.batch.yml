@@ -8,12 +8,13 @@ services:
       - python
       - generate_synthetic_data.py
     command:
-      - --output
+      - --config
+      - /opt/services/batch/schemas/card_transactions.json
+      - --output-dir
       - /opt/spark-data/input
-      - --days
-      - "30"
-      - --transactions-per-day
-      - "36"
+      - --output-name
+      - transactions
+      - --clear-output
     volumes:
       - ./services:/opt/services:ro
       - ./data:/opt/spark-data
@@ -205,6 +206,7 @@ services:
     environment:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
+      - SCHEMA_CONFIG_PATH=/opt/services/batch/schemas/card_transactions.json
     volumes:
       - ./services:/opt/services
       - ./data:/opt/spark-data
@@ -232,5 +234,6 @@ services:
       - "5000:5000"
     environment:
       - OUTPUT_DIR=/opt/spark-data/output
+      - SCHEMA_CONFIG_PATH=/opt/services/batch/schemas/card_transactions.json
     volumes:
       - ./data:/opt/spark-data

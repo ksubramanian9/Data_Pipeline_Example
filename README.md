@@ -1,9 +1,9 @@
-# Retail Transactions Data Pipeline Demo
+# Schema-driven Synthetic Data Pipeline Demo
 
-This repository contains a self-contained demo that showcases a small retail
+This repository contains a self-contained demo that showcases a configurable
 analytics platform built on top of **Hadoop**, **Spark**, **Kafka**, and two
-Flask dashboards. Running the Docker Compose stacks generates synthetic
-transactions, loads them into HDFS, aggregates them with Spark (batch and
+Flask dashboards. Running the Docker Compose stacks generates synthetic events
+from a JSON schema, loads them into HDFS, aggregates them with Spark (batch and
 Structured Streaming), and serves the resulting insights via web UIs.
 
 The project is suitable for workshops or classroom walkthroughs where you want
@@ -29,7 +29,7 @@ the commands below.
 ├─ conf/                           # Hadoop configuration mounted into the containers
 ├─ services/
 │  ├─ batch/
-│  │  ├─ generate_synthetic_data.py    # Creates CSV inputs for the batch job
+│  │  ├─ generate_synthetic_data.py    # Schema-driven batch data generator
 │  │  └─ pipeline_batch.py             # Spark ETL + aggregation (batch)
 │  ├─ event-generator/
 │  │  ├─ Dockerfile
@@ -66,13 +66,15 @@ newer release—the Compose files read the values automatically.
 
 Compose starts the services in dependency order:
 
-* `data-generator` creates 30 days of daily CSVs under `./data/input` using the
-  synthetic generator in `services/batch/generate_synthetic_data.py`.
+* `data-generator` reads `services/batch/schemas/card_transactions.json`
+  (override with your own schema) and materialises a configurable CSV under
+  `./data/input` using `services/batch/generate_synthetic_data.py`.
 * HDFS (NameNode + DataNode) and Spark master/workers come online.
 * `hdfs-init` provisions `/data/input`, `/data/output`, and `/spark-events` in
   HDFS and uploads the generated CSVs.
 * `spark-app` submits `pipeline_batch.py`, which performs schema cleanup,
-  computes daily revenue per product, and writes:
+  derives daily aggregates based on the configured JSON schema metadata, and
+  writes:
   * Parquet to `hdfs://namenode:8020/data/output/analysis_parquet`
   * CSV to `./data/output/analysis_csv/` (for the dashboard)
 * The Flask `dashboard` container serves the results at
@@ -82,19 +84,25 @@ Stop the stack with `docker compose -f docker-compose.batch.yml down`.
 
 ### Customising synthetic batch inputs
 
-Run the generator script directly if you want to tweak the dataset. For
-example, to generate two weeks of higher-frequency transactions starting on a
-specific date:
+Run the generator directly with an alternate schema or overrides. For example,
+to generate a JSON Lines extract with fewer rows and gzip compression:
 
 ```bash
 python services/batch/generate_synthetic_data.py \
-  --output data/input \
-  --days 14 \
-  --transactions-per-day 72 \
-  --start-date 2025-01-01
+  --config services/batch/schemas/card_transactions.json \
+  --output-dir data/input \
+  --output-name transactions \
+  --format jsonl \
+  --n 5000 \
+  --gzip
 ```
 
-Use `--keep-existing` to append to existing CSVs instead of replacing them.
+Create additional JSON schemas beside `card_transactions.json` to model other
+domains. The generator and batch pipeline honour the declared fields,
+distributions, and derived columns without further code changes. Set the
+`SCHEMA_CONFIG_PATH` environment variable on the `spark-app` and `dashboard`
+services (or override the CLI flags) to point at your new schema when running
+the stack.
 
 ### Re-running the batch job
 

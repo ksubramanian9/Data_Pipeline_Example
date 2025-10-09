@@ -1,12 +1,12 @@
-# Detailed Design: Retail Transactions Data Pipeline
+# Detailed Design: Schema-driven Synthetic Data Pipeline
 
 ## 0. Context
-This document expands on the architecture outlined in `High_Level_Design.md` by describing the moving parts, control flow, and configuration of the demo platform. The focus is on how each component is implemented, how they exchange data, and the operational hooks that keep the solution reproducible.
+This document expands on the architecture outlined in `High_Level_Design.md` by describing the moving parts, control flow, and configuration of the schema-driven demo platform. The focus is on how each component is implemented, how they exchange data, and the operational hooks that keep the solution reproducible.
 
 ## 1. Component Inventory
 | Layer | Component | Technology | Key Responsibilities |
 |-------|-----------|------------|-----------------------|
-| Data generation | `services/batch/generate_synthetic_data.py` | Python script | Produce one CSV per day with realistic stores, products, and pricing. |
+| Data generation | `services/batch/generate_synthetic_data.py` | Python script | Materialise schema-driven extracts (CSV/JSONL) from JSON definitions. |
 | Messaging | `services/event-generator/kafka_event_producer.py` | Python + `kafka-python` | Replay CSV rows as JSON events into Kafka topics. |
 | Batch processing | `services/batch/pipeline_batch.py` | PySpark | Cleanse and aggregate historical CSV data, publish Parquet/CSV outputs. |
 | Streaming processing | `services/streaming/streaming_sales_aggregator.py` | PySpark Structured Streaming | Maintain rolling revenue windows and write Parquet outputs with checkpointing. |
@@ -16,30 +16,40 @@ This document expands on the architecture outlined in `High_Level_Design.md` by 
 
 ## 2. Data Model
 ### 2.1 Source schema (CSV rows)
-The synthetic generator emits the following columns:
+The synthetic generator reads JSON definitions (e.g., `services/batch/schemas/card_transactions.json`) and emits fields exactly as declared. The default sample schema ships with the repository and produces the following columns:
 
 | Column | Description | Type |
 |--------|-------------|------|
-| `order_id` | Per-day unique identifier, e.g. `20250115-0001`. | string |
-| `order_date` | ISO date (`YYYY-MM-DD`). | string |
-| `store_id` | Store code (e.g. `BLR-01`). | string |
-| `store_city` | Human-friendly store location. | string |
-| `product` | Menu item name from a curated catalogue. | string |
-| `quantity` | Units purchased (1–5). | integer |
-| `unit_price` | Price after promotions (₹). | decimal string |
-| `amount` | Pre-computed `quantity * unit_price`. | decimal string |
+| `event_id` | UUID per record for traceability. | string |
+| `event_time` | ISO-8601 timestamp sampled from the configured window and seasonality profile. | string |
+| `city` | Origin city (weighted categorical distribution). | string |
+| `channel` | Payment channel (POS, e-commerce, ATM). | string |
+| `merchant_cat` | Merchant category such as Grocery, Fuel, etc. | string |
+| `card_id` | Synthetic PAN surrogate generated from a pattern. | string |
+| `amount` | Monetary value sampled from a log-normal distribution. | float |
+| `is_international` | Whether the transaction occurred outside the home country. | boolean |
+| `is_chip` | Card dipped/swiped via chip. | boolean |
+| `is_contactless` | Contactless (NFC) indicator. | boolean |
+| `label_fraud` | Synthetic fraud flag used for KPI ratios. | boolean |
+| `key` | Derived concatenation of city, merchant category, channel, and card ID. | string |
+
+Additional schema definitions can introduce more fields without changing the generator code; derived columns reference values already stored in the per-record context. An optional `analysis` section in the JSON schema names the timestamp, dimensions, numeric fields, booleans, dataset title, and currency so downstream components can adapt automatically.
 
 ### 2.2 Curated schema (batch Parquet)
-Daily aggregation produces:
+The batch pipeline inspects the schema metadata to decide which timestamp, categorical dimensions, numeric metrics, and boolean indicators to aggregate. Using the default card transactions schema, this yields one row per `(event_time_date, city, channel, merchant_cat)` combination with the following metrics:
 
 | Column | Description |
 |--------|-------------|
-| `order_date` | Date partition key. |
-| `product` | Normalised product label (`UNKNOWN` if absent). |
-| `total_amount` | Rounded sum of monetary value for the date/product pair. |
+| `event_time_date` | Date partition key derived from the configured timestamp field. |
+| `city`, `channel`, `merchant_cat` | Normalised dimensions with blanks replaced by `UNKNOWN`. |
+| `record_count` | Number of records contributing to the bucket. |
+| `sum_amount` | Sum of monetary value rounded to two decimals. |
+| `count_is_international`, `count_is_contactless`, `count_is_chip`, `count_label_fraud` | Counts of boolean indicators. |
+| `avg_amount` | Average ticket size for the bucket. |
+| `rate_is_international`, `rate_is_contactless`, `rate_is_chip`, `rate_label_fraud` | Ratio columns derived from the counts. |
 
 ### 2.3 Streaming aggregates
-Structured Streaming outputs hourly sliding windows:
+Structured Streaming outputs hourly sliding windows based on the (unchanged) product demo:
 
 | Column | Description |
 |--------|-------------|
@@ -50,23 +60,24 @@ Structured Streaming outputs hourly sliding windows:
 
 ## 3. Synthetic Data Generation
 ### 3.1 Responsibilities
-- Maintain curated lists of products (`CATALOGUE`) and stores (`STORES`).
-- Generate deterministic yet varied records using a seeded `random` module.
-- Output one CSV per simulated day with consistent headers.
+- Load a declarative JSON schema and expose CLI overrides for record counts, output format, gzip, and seeds.
+- Maintain a per-record context so derived fields (e.g., concatenations, lookups) can reference previously generated values.
+- Support a broad library of field generators: UUIDs, numeric distributions, weighted categories, datetime seasonality, booleans, geo coordinates, and derived fields.
 
 ### 3.2 Execution flow
-1. **Argument parsing** – `parse_args()` collects output path, number of days, transactions per day, start date, seed, and whether to retain existing files.
-2. **Directory preparation** – `_ensure_output_dir()` creates the target folder; `_clear_existing_files()` removes previous CSVs unless `--keep-existing` is set.
-3. **Date selection** – `determine_start_date()` chooses the first day (explicit or relative to today) and `daterange()` iterates day offsets.
-4. **Row synthesis** – `generate_day_file()` loops `transactions` times, sampling products, stores, quantities, and discount factors to produce dictionaries with `order_id`, `order_date`, pricing, and totals.
-5. **File writing** – Each day produces `retail_<date>.csv` with headers written via `csv.DictWriter`. A summary of generated filenames is printed to stdout.
+1. **Argument parsing** – `parse_args()` collects schema path, output path (file or directory/name), record override, format override, seed, gzip flag, and whether to clear old outputs.
+2. **Configuration loading** – JSON is parsed once; CLI overrides take precedence for seed, output format, and entity count.
+3. **Directory preparation** – `resolve_output_path()` determines the destination file; `maybe_clear_output()` removes older extracts with matching suffixes when `--clear-output` is supplied.
+4. **Row synthesis** – For each index, `gen_field()` routes to type-specific helpers. Datetime sampling honours ramps or seasonal weights, while derived fields read from the shared context populated earlier in the loop.
+5. **File writing** – CSV writers emit headers once followed by escaped rows. JSONL writers dump per-record dictionaries. Optional gzip compression is handled transparently via `open_out()`.
 
 ### 3.3 Outputs
-- The batch stack mounts `/opt/spark-data/input` to `./data/input` on the host. Generated CSVs land in this directory for both batch and streaming pipelines.
+- The batch stack mounts `/opt/spark-data/input` to `./data/input` on the host. Generated CSV or JSONL extracts land in this directory for both batch and streaming pipelines.
 
 ## 4. Batch Spark Pipeline (`services/batch/pipeline_batch.py`)
 ### 4.1 Spark session setup
-- App name `batch.retail_sales_clean_analyze` is used for Spark UI identification.
+- App name `batch.schema_driven_pipeline` is used for Spark UI identification.
+- The JSON schema metadata is loaded from `SCHEMA_CONFIG_PATH` (default `/opt/services/batch/schemas/card_transactions.json`).
 - The session configures `spark.sql.sources.partitionOverwriteMode=dynamic` to allow partition overwrites and enforces UTC timestamps.
 - `USE_HDFS` toggles between HDFS paths (`hdfs://namenode:8020/...`) and local disk, simplifying local-only runs.
 
@@ -76,27 +87,19 @@ Structured Streaming outputs hourly sliding windows:
 
 ### 4.3 Schema normalisation & cleansing
 1. Column names are lower-cased and trimmed to eliminate accidental whitespace.
-2. Product column logic:
-   - Prefer `product`, fall back to `item`, otherwise inject `UNKNOWN`.
-   - `trim()` removes leading/trailing spaces; empty strings become `UNKNOWN`.
-3. Order date derivation:
-   - Candidate columns include `order_date`, `date`, `order_time`, `timestamp`, and `event_time`.
-   - Values are parsed with `try_cast` and regex extraction to support formats like `YYYY-MM-DD` and `YYYYMMDD`.
-   - Rows with missing/invalid dates are logged and dropped.
-4. Monetary amount handling:
-   - If `amount` exists, cast to `double`.
-   - Else, compute `quantity * unit_price` (or `price`) after casting.
-   - Null amounts default to `0.0` and are rounded to two decimals.
-5. Additional hygiene removes null/blank products after transformation.
+2. Timestamp handling is driven by the metadata. The configured timestamp column is cast to `timestamp`, invalid rows are dropped, and a derived `<timestamp>_date` column becomes the partition key.
+3. Numeric metrics listed in the metadata are cast to `double` with nulls replaced by `0.0` so aggregates can run deterministically.
+4. Dimension fields are normalised: whitespace is trimmed, blanks collapse to `UNKNOWN`, and any missing columns are injected with the default value.
+5. Boolean indicators are parsed via `try_cast(... AS boolean)` with fallbacks for textual yes/no variants; missing columns default to `false`.
 
 ### 4.4 Aggregations
-- `daily_product` groups by `order_date` and `product`, summing `amount` into `total_amount` and ordering chronologically.
-- `kpis` collects global metrics: grand total revenue, distinct product count, and total row count (via `clean.count()`).
+- A single `groupBy` produces per-day metrics for each combination of the declared dimensions. Measures include record counts, `sum_<metric>` totals for numeric fields, boolean true counts (`count_<flag>`), and rate/average columns derived afterwards.
+- `kpis` collects platform-wide totals using the same aggregation expressions so dashboards can display rollups consistent with the detailed output.
 
 ### 4.5 Outputs
 | Destination | Format | Purpose |
 |-------------|--------|---------|
-| `OUT_PARQUET` (default `hdfs://namenode:8020/data/output/analysis_parquet`) | Partitioned Parquet by `order_date`. | Durable analytics store; accessible by Spark, Hive, or external tools. |
+| `OUT_PARQUET` (default `hdfs://namenode:8020/data/output/analysis_parquet`) | Partitioned Parquet by `<timestamp>_date`. | Durable analytics store; accessible by Spark, Hive, or external tools. |
 | `OUT_LOCAL_CSV` (default `/opt/spark-data/output/analysis_csv`) | Single CSV file (coalesced). | Source for the batch dashboard bind-mounted to `./data/output/analysis_csv/`. |
 | `OUT_LOCAL_CSV + "_kpis"` | Single-row CSV. | Dashboard KPI tiles and quick diagnostics. |
 
@@ -141,7 +144,7 @@ Spark writes use overwrite mode. `_as_local_uri()` prefixes paths with `file://`
 ## 6. Serving Layer
 ### 6.1 Batch dashboard (`dashboard/`)
 - Flask application that reads CSV summaries (`./data/output/analysis_csv/` and `_kpis`).
-- Uses Chart.js to plot revenue trends and product leaderboards.
+- Uses Chart.js to plot revenue trends and the top city·channel segments, and renders sample aggregated rows for inspection.
 - Refreshes data on a polling schedule (configurable via environment variables in the Docker Compose file).
 
 ### 6.2 Streaming dashboard (`streaming_dashboard/`)

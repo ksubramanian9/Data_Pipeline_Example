@@ -6,11 +6,23 @@ import time
 
 from py4j.protocol import Py4JJavaError
 from pyspark.sql import SparkSession
+from pyspark.sql.column import Column
 from pyspark.sql.functions import (
-    col, coalesce, expr, to_date, trim,
-    when, lit, round as round_, sum as sum_, countDistinct, regexp_extract
+    col,
+    coalesce,
+    count,
+    expr,
+    lit,
+    lower,
+    round as round_,
+    sum as sum_,
+    to_date,
+    trim,
+    when,
 )
 from pyspark.sql.types import DoubleType
+
+from schema_metadata import load_schema_metadata
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -24,7 +36,13 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger("retail_pipeline")
+logger = logging.getLogger("schema.batch.pipeline")
+
+SCHEMA_CONFIG_PATH = os.environ.get(
+    "SCHEMA_CONFIG_PATH", "/opt/services/batch/schemas/card_transactions.json"
+)
+
+METADATA = load_schema_metadata(SCHEMA_CONFIG_PATH)
 
 USE_HDFS = True
 if USE_HDFS:
@@ -37,37 +55,55 @@ else:
     OUT_LOCAL_CSV = "/opt/spark-data/output/analysis_csv"
 
 
-def _as_local_uri(path):
+def _as_local_uri(path: str) -> str:
     """Ensure Spark writes to the local filesystem even when default FS is HDFS."""
 
     if path.startswith("file://"):
         return path
 
-    # Normalise the path to avoid accidental HDFS writes when Spark's default
-    # filesystem is configured to HDFS. Prefixing with ``file://`` forces Spark
-    # to use the container's local filesystem.
     return f"file://{path}"
 
-APP_NAME = "batch.retail_sales_clean_analyze"
+
+APP_NAME = "batch.schema_driven_pipeline"
 
 logger.info("Starting Spark batch pipeline '%s'", APP_NAME)
+logger.info("Loaded schema metadata from %s", SCHEMA_CONFIG_PATH)
+logger.info(
+    "Dataset name: %s | timestamp: %s | dimensions: %s | numeric fields: %s | boolean fields: %s",
+    METADATA.dataset_name,
+    METADATA.timestamp_field,
+    ", ".join(METADATA.dimensions) or "<none>",
+    ", ".join(METADATA.numeric_fields) or "<none>",
+    ", ".join(METADATA.boolean_fields) or "<none>",
+)
 logger.info("Connecting to Spark master via SparkSession builder ...")
 spark = None
 try:
-    spark = (SparkSession.builder
-             .appName(APP_NAME)
-             .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-             .config("spark.sql.session.timeZone", "UTC")
-             .getOrCreate())
-    logger.info("Spark session established (appId=%s)", spark.sparkContext.applicationId)
+    spark = (
+        SparkSession.builder.appName(APP_NAME)
+        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        .config("spark.sql.session.timeZone", "UTC")
+        .getOrCreate()
+    )
+    logger.info(
+        "Spark session established (appId=%s)", spark.sparkContext.applicationId
+    )
     spark.sparkContext.setLogLevel("WARN")
-except Exception:
+except Exception:  # pragma: no cover - defensive logging
     logger.exception("Unable to create Spark session")
     raise
 
-def wait_for_input_files(spark_session, path, use_hdfs, pattern="*.csv",
-                         poll_interval=5, timeout_seconds=300):
+
+def wait_for_input_files(
+    spark_session: SparkSession,
+    path: str,
+    use_hdfs: bool,
+    pattern: str = "*.csv",
+    poll_interval: int = 5,
+    timeout_seconds: int = 300,
+) -> None:
     """Block until CSV input files are visible either locally or on HDFS."""
+
     deadline = (time.time() + timeout_seconds) if timeout_seconds else None
 
     if use_hdfs:
@@ -86,8 +122,10 @@ def wait_for_input_files(spark_session, path, use_hdfs, pattern="*.csv",
                 if matches and len(matches) > 0:
                     logger.info("Detected %d file(s) in %s", len(matches), path)
                     return
-            except Py4JJavaError as err:
-                logger.warning("Could not access HDFS path %s: %s", path, err.java_exception)
+            except Py4JJavaError as err:  # pragma: no cover - HDFS flake guard
+                logger.warning(
+                    "Could not access HDFS path %s: %s", path, err.java_exception
+                )
 
             if deadline and time.time() > deadline:
                 raise RuntimeError(f"Timed out waiting for files in {path}")
@@ -107,134 +145,179 @@ def wait_for_input_files(spark_session, path, use_hdfs, pattern="*.csv",
             time.sleep(poll_interval)
 
 
-def main():
+def _normalise_dimension(column: str) -> Column:
+    trimmed = trim(col(column))
+    return when(trimmed.isNull() | (trimmed == ""), lit("UNKNOWN")).otherwise(trimmed)
+
+
+def _as_boolean(column: str):
+    casted = expr(f"try_cast(`{column}` AS boolean)")
+    cleaned = trim(lower(col(column)))
+    return coalesce(
+        casted,
+        when(cleaned.isNull() | (cleaned == ""), lit(False))
+        .when(cleaned.isin("true", "1", "yes", "y"), lit(True))
+        .when(cleaned.isin("false", "0", "no", "n"), lit(False))
+        .otherwise(lit(False)),
+    )
+
+
+def main() -> None:
     logger.info("Reading input from: %s", INPUT_PATH)
     wait_for_input_files(spark, INPUT_PATH, USE_HDFS)
 
     logger.info("Loading CSV data into DataFrame ...")
-    df = (spark.read
-          .option("header", True)
-          .option("inferSchema", True)
-          .option("recursiveFileLookup", "true")  # reads all files under the directory
-          .csv(INPUT_PATH))
-
-# df = (spark.read
-#       .option("header", True)
-#       .option("inferSchema", True)
-#       .csv(INPUT_PATH))
+    df = (
+        spark.read.option("header", True)
+        .option("inferSchema", True)
+        .option("recursiveFileLookup", "true")
+        .csv(INPUT_PATH)
+    )
 
     if df.rdd.isEmpty():
         logger.warning("No input files found. Exiting gracefully.")
         spark.stop()
         raise SystemExit(0)
 
-    cols = [c.lower().strip() for c in df.columns]
-    df = df.toDF(*cols)
+    columns = [c.lower().strip() for c in df.columns]
+    df = df.toDF(*columns)
 
-    product_col = "product" if "product" in cols else ("item" if "item" in cols else None)
-    if product_col:
-        logger.info("Normalising product column from '%s'", product_col)
-        df = df.withColumn("product", trim(col(product_col)))
-    else:
-        logger.info("Product column missing — filling UNKNOWN placeholder")
-        df = df.withColumn("product", lit("UNKNOWN"))
+    timestamp_column = METADATA.timestamp_field
 
-    date_col = None
-    for cand in ["order_date", "date", "order_time", "timestamp", "event_time"]:
-        if cand in cols:
-            date_col = cand
-            break
+    if timestamp_column not in columns:
+        logger.error(
+            "Timestamp column '%s' not found in input schema: %s",
+            timestamp_column,
+            columns,
+        )
+        spark.stop()
+        raise SystemExit(1)
 
-    if date_col is None:
-        logger.warning("Date column missing — rows will be dropped from the analysis")
-        df = df.withColumn("order_date", lit(None).cast("date"))
-    else:
-        logger.info("Parsing order timestamps from '%s'", date_col)
-        date_raw = trim(col(date_col))
-        order_ts = expr(f"try_cast(`{date_col}` AS timestamp)")
-        order_date_direct = expr(f"try_cast(`{date_col}` AS date)")
-        yyyymmdd_token = regexp_extract(date_raw, r"^(\\d{8})", 1)
+    logger.info("Normalising timestamp column '%s'", timestamp_column)
+    df = df.withColumn(
+        timestamp_column, expr(f"try_cast(`{timestamp_column}` AS timestamp)")
+    )
 
-        df = (df
-              .withColumn("order_ts", order_ts)
-              .withColumn(
-                  "order_date",
-                  coalesce(
-                      to_date(col("order_ts")),
-                      order_date_direct,
-                      to_date(
-                          when(yyyymmdd_token != "", yyyymmdd_token),
-                          "yyyyMMdd"
-                      )
-                  )
-              )
-              .drop("order_ts"))
-
-    invalid_dates = df.filter(col("order_date").isNull())
-    invalid_count = invalid_dates.count()
+    invalid_ts = df.filter(col(timestamp_column).isNull())
+    invalid_count = invalid_ts.count()
     if invalid_count:
-        logger.warning("Dropping %d row(s) with missing or unparseable order_date", invalid_count)
-    df = df.filter(col("order_date").isNotNull())
+        logger.warning(
+            "Dropping %d row(s) with missing or unparseable timestamps", invalid_count
+        )
+    df = df.filter(col(timestamp_column).isNotNull())
 
-    has_amount = "amount" in cols
-    has_qty_price = ("quantity" in cols) and ("unit_price" in cols or "price" in cols)
+    date_column = METADATA.date_column
+    df = df.withColumn(date_column, to_date(col(timestamp_column)))
 
-    if has_amount:
-        logger.info("Using provided 'amount' column for monetary values")
-        df = df.withColumn("amount", expr("try_cast(amount AS double)"))
-    elif has_qty_price:
-        price_col = "unit_price" if "unit_price" in cols else "price"
-        logger.info("Computing amount from quantity * %s", price_col)
-        df = (df
-              .withColumn("quantity", expr("try_cast(quantity AS double)"))
-              .withColumn(price_col, expr(f"try_cast(`{price_col}` AS double)"))
-              .withColumn("amount", (col("quantity") * col(price_col)).cast(DoubleType())))
-    else:
-        logger.info("No amount/quantity-price columns detected — defaulting to 0.0")
-        df = df.withColumn("amount", lit(0.0).cast(DoubleType()))
+    for numeric in METADATA.numeric_fields:
+        if numeric in df.columns:
+            df = df.withColumn(
+                numeric,
+                coalesce(expr(f"try_cast(`{numeric}` AS double)"), lit(0.0)).cast(
+                    DoubleType()
+                ),
+            )
+        else:
+            logger.info("Adding missing numeric column '%s'", numeric)
+            df = df.withColumn(numeric, lit(0.0))
 
-    clean = (df
-             .filter(col("amount").isNotNull())
-             .withColumn("amount", round_(col("amount"), 2))
-             .withColumn("product",
-                         when(col("product").isNull() | (trim(col("product")) == ""),
-                              lit("UNKNOWN"))
-                         .otherwise(col("product"))))
+    for dimension in METADATA.dimensions:
+        if dimension in df.columns:
+            df = df.withColumn(dimension, _normalise_dimension(dimension))
+        else:
+            logger.info("Adding missing dimension column '%s'", dimension)
+            df = df.withColumn(dimension, lit("UNKNOWN"))
 
-    logger.info("Aggregating daily totals per product ...")
-    daily_product = (clean.groupBy("order_date", "product")
-                           .agg(sum_("amount").alias("total_amount"))
-                           .orderBy("order_date", "product"))
+    for boolean_field in METADATA.boolean_fields:
+        if boolean_field in df.columns:
+            df = df.withColumn(boolean_field, _as_boolean(boolean_field))
+        else:
+            df = df.withColumn(boolean_field, lit(False))
+
+    selected_columns = {timestamp_column, date_column}
+    selected_columns.update(METADATA.dimensions)
+    selected_columns.update(METADATA.numeric_fields)
+    selected_columns.update(METADATA.boolean_fields)
+
+    clean = df.select(*sorted(selected_columns))
+
+    logger.info(
+        "Aggregating dataset by date (%s) and dimensions %s", date_column, METADATA.dimensions
+    )
+
+    group_columns = [date_column] + METADATA.dimensions
+    aggregate_expressions = [count("*").alias("record_count")]
+
+    for numeric in METADATA.numeric_fields:
+        aggregate_expressions.append(sum_(col(numeric)).alias(f"sum_{numeric}"))
+
+    for boolean_field in METADATA.boolean_fields:
+        aggregate_expressions.append(
+            sum_(when(col(boolean_field), lit(1)).otherwise(lit(0))).alias(
+                f"count_{boolean_field}"
+            )
+        )
+
+    aggregated = clean.groupBy(*group_columns).agg(*aggregate_expressions)
+
+    for numeric in METADATA.numeric_fields:
+        aggregated = aggregated.withColumn(
+            f"avg_{numeric}",
+            when(
+                col("record_count") > 0,
+                round_(col(f"sum_{numeric}") / col("record_count"), 4),
+            ).otherwise(lit(0.0)),
+        )
+
+    for boolean_field in METADATA.boolean_fields:
+        aggregated = aggregated.withColumn(
+            f"rate_{boolean_field}",
+            when(
+                col("record_count") > 0,
+                round_(col(f"count_{boolean_field}") / col("record_count"), 4),
+            ).otherwise(lit(0.0)),
+        )
+
+    aggregated = aggregated.orderBy(*group_columns)
 
     logger.info("Calculating KPI snapshot ...")
-    kpis = (clean.agg(
-                sum_("amount").alias("grand_total"),
-                countDistinct("product").alias("distinct_products"))
-           .withColumn("rows", lit(clean.count())))
+    kpi_aggs = [count("*").alias("record_count")]
+    for numeric in METADATA.numeric_fields:
+        kpi_aggs.append(sum_(col(numeric)).alias(f"sum_{numeric}"))
+    for boolean_field in METADATA.boolean_fields:
+        kpi_aggs.append(
+            sum_(when(col(boolean_field), lit(1)).otherwise(lit(0))).alias(
+                f"count_{boolean_field}"
+            )
+        )
+
+    kpis = clean.agg(*kpi_aggs)
 
     logger.info("Writing detailed parquet to: %s", OUT_PARQUET)
-    (daily_product
-        .repartition("order_date")
-        .write
-        .mode("overwrite")
-        .partitionBy("order_date")
-        .parquet(OUT_PARQUET))
+    (
+        aggregated.repartition(date_column)
+        .write.mode("overwrite")
+        .partitionBy(date_column)
+        .parquet(OUT_PARQUET)
+    )
 
     local_csv_uri = _as_local_uri(OUT_LOCAL_CSV)
-    logger.info("Writing summarized CSV (single file) to: %s", local_csv_uri)
-    (daily_product
-        .coalesce(1)
-        .write
-        .mode("overwrite")
+    logger.info("Writing summarised CSV (single file) to: %s", local_csv_uri)
+    (
+        aggregated.coalesce(1)
+        .write.mode("overwrite")
         .option("header", True)
-        .csv(local_csv_uri))
+        .csv(local_csv_uri)
+    )
 
     logger.info("KPI snapshot:")
     kpis.show(truncate=False)
-    (kpis.coalesce(1)
-         .write.mode("overwrite")
-         .option("header", True)
-         .csv(_as_local_uri(OUT_LOCAL_CSV + "_kpis")))
+    (
+        kpis.coalesce(1)
+        .write.mode("overwrite")
+        .option("header", True)
+        .csv(_as_local_uri(OUT_LOCAL_CSV + "_kpis"))
+    )
 
     logger.info("Pipeline complete. Shutting down Spark session.")
     spark.stop()
