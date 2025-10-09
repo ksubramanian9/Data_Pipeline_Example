@@ -1,10 +1,10 @@
-# High Level Design: Retail Transactions Data Pipeline
+# High Level Design: Schema-driven Synthetic Data Pipeline
 
 ## Purpose and Scope
-This document summarises the major building blocks of the demo retail analytics platform. It highlights how synthetic transaction data moves through batch and streaming workflows, the technologies used, and the way business users access insights. The intent is to offer a conceptual map for stakeholders before they dive into the implementation details captured in `Detailed_Design.md`.
+This document summarises the major building blocks of the schema-driven analytics demo. It highlights how synthetic event data moves through batch and streaming workflows, the technologies used, and the way business users access insights. The intent is to offer a conceptual map for stakeholders before they dive into the implementation details captured in `Detailed_Design.md`.
 
 ## Architecture at a Glance
-- **Data origins** – Synthetic CSV files generated to mimic point-of-sale transactions.
+- **Data origins** – Schema-driven CSV files generated to mimic configurable business events across multiple categorical dimensions.
 - **Processing engines** – Apache Spark jobs run in batch and streaming modes to cleanse, enrich, and aggregate the data.
 - **Data transport** – Files land in shared storage (local folders or HDFS). Kafka carries near-real-time events for the streaming pipeline.
 - **Serving layer** – Curated outputs are exposed through lightweight Flask dashboards and can be reused by external tools.
@@ -37,8 +37,8 @@ This document summarises the major building blocks of the demo retail analytics 
 ```
 
 ## Data Flow Summary
-1. **Ingestion** – The batch generator emits one CSV per day with product, store, and pricing fields. For streaming demos, the same files are replayed as JSON events through Kafka.
-2. **Processing** – Spark normalises schemas, computes monetary amounts, derives daily totals (batch), and maintains rolling one-hour revenue windows (streaming).
+1. **Ingestion** – The batch generator materialises a configurable CSV based on JSON schema definitions. For streaming demos, the same rows are replayed as JSON events through Kafka.
+2. **Processing** – Spark normalises schemas, computes aggregates using the schema metadata (batch), and maintains rolling one-hour windows (streaming).
 3. **Storage** – Clean data is written to HDFS partitions for durability and to local bind mounts for dashboards. Streaming results land in a dedicated Parquet folder with checkpointing for recovery.
 4. **Consumption** – Two Flask dashboards poll the curated folders to render charts and KPI tiles for batch and streaming outputs.
 

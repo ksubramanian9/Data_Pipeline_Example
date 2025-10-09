@@ -1,0 +1,93 @@
+{
+  "seed": 43,
+  "entity_count": 20000,
+  "time_window": {
+    "start": "2025-01-01T06:00:00",
+    "end": "2025-02-28T23:59:59"
+  },
+  "output": {
+    "format": "csv"
+  },
+  "schema": {
+    "fields": [
+      {"name": "event_id", "type": "uuid"},
+      {
+        "name": "event_time",
+        "type": "datetime",
+        "format": "iso",
+        "mode": "seasonality",
+        "profile": {
+          "hour_of_day": {"8": 1.5, "9": 1.5, "18": 1.5, "19": 1.5, "_default": 1.0},
+          "day_of_week": {"5": 0.8, "6": 0.7, "_default": 1.0}
+        }
+      },
+      {
+        "name": "city",
+        "type": "category",
+        "choices": [
+          {"value": "Bengaluru", "weight": 3},
+          {"value": "Chennai", "weight": 2},
+          {"value": "Mumbai", "weight": 2},
+          {"value": "Delhi", "weight": 2},
+          {"value": "Hyderabad", "weight": 1}
+        ]
+      },
+      {
+        "name": "channel",
+        "type": "category",
+        "choices": [
+          {"value": "POS", "weight": 3},
+          {"value": "ECom", "weight": 5},
+          {"value": "ATM", "weight": 2}
+        ]
+      },
+      {
+        "name": "merchant_cat",
+        "type": "category",
+        "choices": [
+          "Grocery",
+          "Fuel",
+          "Electronics",
+          "Dining",
+          "Travel",
+          "BillPay"
+        ]
+      },
+      {
+        "name": "card_id",
+        "type": "string",
+        "pattern": "CARD-{00000000-99999999}"
+      },
+      {
+        "name": "amount",
+        "type": "float",
+        "distribution": "lognormal",
+        "mean": 0.0,
+        "stddev": 1.0
+      },
+      {"name": "is_international", "type": "bool", "p_true": 0.08},
+      {"name": "is_chip", "type": "bool", "p_true": 0.7},
+      {"name": "is_contactless", "type": "bool", "p_true": 0.4},
+      {"name": "label_fraud", "type": "bool", "p_true": 0.01},
+      {
+        "name": "key",
+        "type": "derived_concat",
+        "parts": ["city", "merchant_cat", "channel", "card_id"],
+        "sep": "|"
+      }
+    ]
+  },
+  "analysis": {
+    "name": "Card Transactions",
+    "timestamp_field": "event_time",
+    "dimensions": ["city", "channel", "merchant_cat"],
+    "numeric_fields": ["amount"],
+    "boolean_fields": [
+      "is_international",
+      "is_chip",
+      "is_contactless",
+      "label_fraud"
+    ],
+    "currency": "INR"
+  }
+}
